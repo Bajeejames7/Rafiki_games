@@ -5,6 +5,7 @@ import {
   Alert,
   Animated,
   Image,
+  ImageBackground,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -24,6 +25,7 @@ import { Feather } from "@expo/vector-icons";
 import colors from "@/constants/colors";
 
 const schoolLogo = require("@/assets/images/school-logo.png");
+const schoolBg = require("@/assets/images/school-bg.jpg");
 
 const STORAGE_KEY = "@virtue_points";
 const TEACHER_KEY = "@virtue_teacher";
@@ -607,8 +609,9 @@ export default function HomeScreen() {
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
 
   return (
-    <View style={[styles.container, { backgroundColor: bg }]}>
-      <StatusBar barStyle="light-content" backgroundColor={bg} />
+    <ImageBackground source={schoolBg} style={styles.container} resizeMode="cover">
+      <View style={styles.overlay} />
+      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
 
       <TeacherSetupModal
         visible={showSetup}
@@ -685,13 +688,17 @@ export default function HomeScreen() {
           Long-press a card to reset that team
         </Text>
       </ScrollView>
-    </View>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0, 0, 0, 0.72)",
   },
   header: {
     paddingHorizontal: 20,
