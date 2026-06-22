@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   Animated,
+  Image,
   Platform,
   Pressable,
   ScrollView,
@@ -18,6 +19,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 
 import colors from "@/constants/colors";
+
+const schoolLogo = require("@/assets/images/school-logo.png");
 
 const STORAGE_KEY = "@virtue_points";
 
@@ -262,19 +265,24 @@ export default function HomeScreen() {
       <StatusBar barStyle="light-content" backgroundColor={bg} />
 
       <View style={[styles.header, { paddingTop: topInset + 12 }]}>
-        <View>
-          <Text style={styles.headerTitle}>Virtue Points</Text>
-          <Text style={[styles.headerSubtitle, { color: mutedColor }]}>
-            {totalPoints} total point{totalPoints !== 1 ? "s" : ""} awarded
-          </Text>
+        <View style={styles.headerTop}>
+          <Image
+            source={schoolLogo}
+            style={styles.schoolLogo}
+            resizeMode="contain"
+          />
+          <TouchableOpacity
+            onPress={handleResetAll}
+            style={styles.resetAllBtn}
+            activeOpacity={0.7}
+          >
+            <Feather name="refresh-ccw" size={16} color={mutedColor} />
+          </TouchableOpacity>
         </View>
-        <TouchableOpacity
-          onPress={handleResetAll}
-          style={styles.resetAllBtn}
-          activeOpacity={0.7}
-        >
-          <Feather name="refresh-ccw" size={16} color={mutedColor} />
-        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Virtue Points</Text>
+        <Text style={[styles.headerSubtitle, { color: mutedColor }]}>
+          {totalPoints} total point{totalPoints !== 1 ? "s" : ""} awarded
+        </Text>
       </View>
 
       <ScrollView
@@ -309,11 +317,18 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    justifyContent: "space-between",
     paddingHorizontal: 20,
     paddingBottom: 16,
+  },
+  headerTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+  schoolLogo: {
+    width: 160,
+    height: 60,
   },
   headerTitle: {
     fontSize: 28,
