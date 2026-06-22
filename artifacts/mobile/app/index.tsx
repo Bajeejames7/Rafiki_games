@@ -86,6 +86,152 @@ function ScoreButton({
   );
 }
 
+function LeaderBanner({ team, score, isTie }: { team: Team | null; score: number; isTie: boolean }) {
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.04, duration: 900, useNativeDriver: false }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 900, useNativeDriver: false }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, []);
+
+  if (score === 0) {
+    return (
+      <View style={leaderStyles.emptyBanner}>
+        <Text style={leaderStyles.emptyIcon}>🏆</Text>
+        <Text style={leaderStyles.emptyText}>No points awarded yet</Text>
+        <Text style={leaderStyles.emptySubtext}>Start scoring to see the leader!</Text>
+      </View>
+    );
+  }
+
+  if (isTie || !team) {
+    return (
+      <View style={[leaderStyles.banner, { backgroundColor: "#21262D", borderColor: "#30363D" }]}>
+        <Text style={leaderStyles.crownEmoji}>🤝</Text>
+        <View style={leaderStyles.bannerInfo}>
+          <Text style={leaderStyles.tiedLabel}>IT'S A TIE</Text>
+          <Text style={leaderStyles.tiedScore}>{score} pts each</Text>
+        </View>
+      </View>
+    );
+  }
+
+  const tc = colors.teams[team.id];
+
+  return (
+    <Animated.View
+      style={[
+        leaderStyles.banner,
+        {
+          backgroundColor: tc.light,
+          borderColor: tc.primary,
+          transform: [{ scale: pulseAnim }],
+          shadowColor: tc.primary,
+          shadowOffset: { width: 0, height: 0 },
+          shadowOpacity: 0.5,
+          shadowRadius: 12,
+          elevation: 8,
+        },
+      ]}
+    >
+      <Text style={leaderStyles.crownEmoji}>👑</Text>
+      <View style={leaderStyles.bannerInfo}>
+        <Text style={[leaderStyles.leadingLabel, { color: tc.primary + "99" }]}>LEADING</Text>
+        <Text style={[leaderStyles.teamNameLarge, { color: tc.text }]}>{team.name}</Text>
+      </View>
+      <View style={leaderStyles.bannerScore}>
+        <Text style={[leaderStyles.bannerScoreNum, { color: tc.primary }]}>{score}</Text>
+        <Text style={[leaderStyles.bannerScorePts, { color: tc.primary + "77" }]}>pts</Text>
+      </View>
+    </Animated.View>
+  );
+}
+
+const leaderStyles = StyleSheet.create({
+  banner: {
+    borderRadius: 18,
+    borderWidth: 1.5,
+    padding: 18,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+  },
+  emptyBanner: {
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: "#30363D",
+    backgroundColor: "#161B22",
+    padding: 24,
+    alignItems: "center",
+    gap: 6,
+  },
+  emptyIcon: {
+    fontSize: 36,
+    marginBottom: 4,
+  },
+  emptyText: {
+    fontSize: 16,
+    fontFamily: "Inter_600SemiBold",
+    color: "#8B949E",
+  },
+  emptySubtext: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    color: "#8B949E66",
+  },
+  crownEmoji: {
+    fontSize: 38,
+  },
+  bannerInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  leadingLabel: {
+    fontSize: 11,
+    fontFamily: "Inter_600SemiBold",
+    letterSpacing: 1.5,
+  },
+  tiedLabel: {
+    fontSize: 11,
+    fontFamily: "Inter_600SemiBold",
+    letterSpacing: 1.5,
+    color: "#8B949E",
+  },
+  teamNameLarge: {
+    fontSize: 24,
+    fontFamily: "Inter_700Bold",
+    letterSpacing: -0.5,
+  },
+  tiedScore: {
+    fontSize: 18,
+    fontFamily: "Inter_600SemiBold",
+    color: "#8B949E",
+    marginTop: 2,
+  },
+  bannerScore: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 2,
+  },
+  bannerScoreNum: {
+    fontSize: 44,
+    fontFamily: "Inter_700Bold",
+    lineHeight: 48,
+    letterSpacing: -2,
+  },
+  bannerScorePts: {
+    fontSize: 13,
+    fontFamily: "Inter_500Medium",
+    marginBottom: 5,
+  },
+});
+
 function TeamCard({
   team,
   score,
@@ -256,6 +402,9 @@ export default function HomeScreen() {
 
   const rankedTeams = getRankedTeams(scores);
   const totalPoints = Object.values(scores).reduce((a, b) => a + b, 0);
+  const leader = rankedTeams[0];
+  const leaderScore = scores[leader.id] ?? 0;
+  const isTie = leaderScore > 0 && (scores[rankedTeams[1].id] ?? 0) === leaderScore;
 
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
@@ -292,6 +441,8 @@ export default function HomeScreen() {
         ]}
         showsVerticalScrollIndicator={false}
       >
+        <LeaderBanner team={isTie ? null : leader} score={leaderScore} isTie={isTie} />
+
         {rankedTeams.map((team, idx) => (
           <TeamCard
             key={team.id}
