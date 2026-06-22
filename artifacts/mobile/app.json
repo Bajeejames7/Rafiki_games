@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "Virtue Points Tracker",
-    "slug": "mobile",
+    "name": "Rafiki school games tracker",
+    "slug": "rafikischoolgamestracker",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "mobile",
+    "scheme": "rafikischoolgamestracker",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
@@ -14,9 +14,12 @@
       "backgroundColor": "#0D1117"
     },
     "ios": {
-      "supportsTablet": false
+      "supportsTablet": false,
+      "bundleIdentifier": "com.rafikischoolgamestracker.app"
     },
-    "android": {},
+    "android": {
+      "package": "com.rafikischoolgamestracker.app"
+    },
     "web": {
       "favicon": "./assets/images/icon.png"
     },
