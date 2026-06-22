@@ -52,6 +52,288 @@ function formatTime(ts: number): string {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function getDayLabel(ts: number): string {
+  const d = new Date(ts);
+  const today = new Date();
+  if (d.toDateString() === today.toDateString()) return "Today";
+  const yest = new Date(today); yest.setDate(today.getDate() - 1);
+  if (d.toDateString() === yest.toDateString()) return "Yesterday";
+  return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+}
+
+function getDayKey(ts: number): string {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+function isThisWeek(ts: number): boolean {
+  const now = new Date();
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+  monday.setHours(0, 0, 0, 0);
+  return ts >= monday.getTime();
+}
+
+function calcTotals(entries: LogEntry[]): Record<string, number> {
+  const totals: Record<string, number> = {};
+  for (const e of entries) {
+    totals[e.teamId] = (totals[e.teamId] ?? 0) + e.amount;
+  }
+  return totals;
+}
+
+function WeeklyModal({
+  visible,
+  log,
+  onClose,
+}: {
+  visible: boolean;
+  log: LogEntry[];
+  onClose: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+
+  const weekEntries = log.filter((e) => isThisWeek(e.timestamp) && e.amount > 0);
+
+  // Group by day key
+  const dayMap = new Map<string, { label: string; ts: number; entries: LogEntry[] }>();
+  for (const e of weekEntries) {
+    const key = getDayKey(e.timestamp);
+    if (!dayMap.has(key)) {
+      dayMap.set(key, { label: getDayLabel(e.timestamp), ts: e.timestamp, entries: [] });
+    }
+    dayMap.get(key)!.entries.push(e);
+  }
+  const days = Array.from(dayMap.values()).sort((a, b) => b.ts - a.ts);
+
+  const weeklyTotals = calcTotals(weekEntries);
+  const rankedByWeek = [...TEAMS].sort((a, b) => (weeklyTotals[b.id] ?? 0) - (weeklyTotals[a.id] ?? 0));
+  const weeklyGrand = Object.values(weeklyTotals).reduce((a, b) => a + b, 0);
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" statusBarTranslucent>
+      <View style={wkStyles.overlay}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View style={[wkStyles.sheet, { paddingBottom: insets.bottom + 16 }]}>
+          <View style={wkStyles.sheetHeader}>
+            <View>
+              <Text style={wkStyles.title}>Weekly Leaderboard</Text>
+              <Text style={wkStyles.sub}>{weeklyGrand} pts awarded this week</Text>
+            </View>
+            <TouchableOpacity onPress={onClose} style={wkStyles.closeBtn} activeOpacity={0.7}>
+              <Feather name="x" size={18} color="#8B949E" />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {/* Weekly totals banner */}
+            <View style={wkStyles.section}>
+              <Text style={wkStyles.sectionLabel}>THIS WEEK — ALL TEAMS</Text>
+              {rankedByWeek.map((team, idx) => {
+                const tc = colors.teams[team.id];
+                const pts = weeklyTotals[team.id] ?? 0;
+                const maxPts = weeklyTotals[rankedByWeek[0].id] ?? 1;
+                const barWidth = maxPts > 0 ? Math.max((pts / maxPts) * 100, pts > 0 ? 6 : 0) : 0;
+                const medal = ["🥇", "🥈", "🥉", ""][idx] ?? "";
+                return (
+                  <View key={team.id} style={wkStyles.teamRow}>
+                    <Text style={wkStyles.medal}>{medal}</Text>
+                    <View style={wkStyles.teamRowInfo}>
+                      <View style={wkStyles.teamRowTop}>
+                        <Text style={[wkStyles.teamRowName, { color: tc.text }]}>{team.name}</Text>
+                        <Text style={[wkStyles.teamRowPts, { color: tc.primary }]}>{pts} pts</Text>
+                      </View>
+                      <View style={wkStyles.barTrack}>
+                        <View style={[wkStyles.barFill, { width: `${barWidth}%` as any, backgroundColor: tc.primary }]} />
+                      </View>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+
+            {/* Day-by-day breakdown */}
+            {days.length === 0 ? (
+              <View style={wkStyles.empty}>
+                <Text style={wkStyles.emptyIcon}>📅</Text>
+                <Text style={wkStyles.emptyText}>No points awarded this week</Text>
+              </View>
+            ) : (
+              days.map((day) => {
+                const dayTotals = calcTotals(day.entries);
+                const dayGrand = Object.values(dayTotals).reduce((a, b) => a + b, 0);
+                const isToday = getDayKey(Date.now()) === getDayKey(day.ts);
+                return (
+                  <View key={getDayKey(day.ts)} style={wkStyles.section}>
+                    <View style={wkStyles.dayHeader}>
+                      <Text style={[wkStyles.sectionLabel, isToday && { color: "#5B8AF5" }]}>
+                        {day.label.toUpperCase()}
+                      </Text>
+                      <Text style={wkStyles.dayTotal}>{dayGrand} pts total</Text>
+                    </View>
+                    {[...TEAMS]
+                      .filter((t) => (dayTotals[t.id] ?? 0) > 0)
+                      .sort((a, b) => (dayTotals[b.id] ?? 0) - (dayTotals[a.id] ?? 0))
+                      .map((team) => {
+                        const tc = colors.teams[team.id];
+                        const pts = dayTotals[team.id] ?? 0;
+                        return (
+                          <View key={team.id} style={wkStyles.dayTeamRow}>
+                            <View style={[wkStyles.dot, { backgroundColor: tc.primary }]} />
+                            <Text style={[wkStyles.dayTeamName, { color: tc.text }]}>{team.name}</Text>
+                            <Text style={[wkStyles.dayTeamPts, { color: tc.primary }]}>+{pts}</Text>
+                          </View>
+                        );
+                      })}
+                    <Text style={wkStyles.submissionCount}>
+                      {day.entries.length} award{day.entries.length !== 1 ? "s" : ""} by{" "}
+                      {[...new Set(day.entries.map((e) => e.teacherName))].join(", ")}
+                    </Text>
+                  </View>
+                );
+              })
+            )}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const wkStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(0,0,0,0.6)",
+  },
+  sheet: {
+    backgroundColor: "#161B22",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    borderTopWidth: 1,
+    borderColor: "#30363D",
+    paddingTop: 20,
+    paddingHorizontal: 20,
+    maxHeight: "88%",
+  },
+  sheetHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    marginBottom: 16,
+  },
+  title: {
+    fontSize: 20,
+    fontFamily: "Inter_700Bold",
+    color: "#f0f0f0",
+    letterSpacing: -0.3,
+  },
+  sub: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: "#8B949E",
+    marginTop: 2,
+  },
+  closeBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#21262D",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  section: {
+    backgroundColor: "#21262D",
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
+    gap: 10,
+  },
+  sectionLabel: {
+    fontSize: 11,
+    fontFamily: "Inter_600SemiBold",
+    color: "#8B949E",
+    letterSpacing: 1.2,
+  },
+  teamRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  medal: { fontSize: 18, width: 26 },
+  teamRowInfo: { flex: 1, gap: 5 },
+  teamRowTop: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  teamRowName: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+  },
+  teamRowPts: {
+    fontSize: 14,
+    fontFamily: "Inter_700Bold",
+  },
+  barTrack: {
+    height: 5,
+    backgroundColor: "#30363D",
+    borderRadius: 3,
+    overflow: "hidden",
+  },
+  barFill: {
+    height: 5,
+    borderRadius: 3,
+  },
+  dayHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  dayTotal: {
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+    color: "#8B949E",
+  },
+  dayTeamRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 2,
+  },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  dayTeamName: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: "Inter_500Medium",
+  },
+  dayTeamPts: {
+    fontSize: 13,
+    fontFamily: "Inter_700Bold",
+  },
+  submissionCount: {
+    fontSize: 11,
+    fontFamily: "Inter_400Regular",
+    color: "#8B949E",
+    marginTop: 2,
+  },
+  empty: {
+    alignItems: "center",
+    paddingVertical: 32,
+    gap: 8,
+  },
+  emptyIcon: { fontSize: 32 },
+  emptyText: {
+    fontSize: 14,
+    fontFamily: "Inter_500Medium",
+    color: "#8B949E",
+  },
+});
+
 function HistoryModal({
   visible,
   log,
@@ -723,6 +1005,7 @@ export default function HomeScreen() {
   const [showSetup, setShowSetup] = useState(false);
   const [log, setLog] = useState<LogEntry[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [showWeekly, setShowWeekly] = useState(false);
 
   const insets = useSafeAreaInsets();
   const colorScheme = useColorScheme();
@@ -808,9 +1091,21 @@ export default function HomeScreen() {
 
     const medal = (rank: number) => ["🥇", "🥈", "🥉", "4️⃣"][rank] ?? "";
     const ranked = getRankedTeams(scores);
-    const lines = ranked.map((team, i) =>
+
+    // Today's totals from log
+    const todayEntries = log.filter((e) => getDayKey(e.timestamp) === getDayKey(Date.now()) && e.amount > 0);
+    const todayTotals = calcTotals(todayEntries);
+    const todayGrand = Object.values(todayTotals).reduce((a, b) => a + b, 0);
+
+    const scoreLines = ranked.map((team, i) =>
       `${medal(i)} ${team.name}: ${scores[team.id] ?? 0} pts`
     ).join("\n");
+
+    const todayLines = [...TEAMS]
+      .filter((t) => (todayTotals[t.id] ?? 0) > 0)
+      .sort((a, b) => (todayTotals[b.id] ?? 0) - (todayTotals[a.id] ?? 0))
+      .map((t) => `  • ${t.name}: +${todayTotals[t.id]} pts today`)
+      .join("\n");
 
     const header = teacherName
       ? `📊 Virtue Points — ${teacherName} (${teacherClass})`
@@ -820,9 +1115,15 @@ export default function HomeScreen() {
       header,
       `📅 ${dateStr} at ${timeStr}`,
       "",
-      lines,
+      "CURRENT STANDINGS",
+      scoreLines,
       "",
-      `Total points awarded: ${Object.values(scores).reduce((a, b) => a + b, 0)}`,
+      ...(todayGrand > 0 ? [
+        `TODAY'S CONTRIBUTIONS (${todayGrand} pts)`,
+        todayLines,
+        "",
+      ] : []),
+      `Total points ever awarded: ${Object.values(scores).reduce((a, b) => a + b, 0)}`,
     ].join("\n");
 
     try {
@@ -913,6 +1214,12 @@ export default function HomeScreen() {
         onClear={handleClearLog}
       />
 
+      <WeeklyModal
+        visible={showWeekly}
+        log={log}
+        onClose={() => setShowWeekly(false)}
+      />
+
       <View style={[styles.header, { paddingTop: topInset + 12 }]}>
         <View style={styles.headerTop}>
           <Image
@@ -921,6 +1228,13 @@ export default function HomeScreen() {
             resizeMode="contain"
           />
           <View style={styles.headerActions}>
+            <TouchableOpacity
+              onPress={() => setShowWeekly(true)}
+              style={styles.resetAllBtn}
+              activeOpacity={0.7}
+            >
+              <Feather name="bar-chart-2" size={16} color={mutedColor} />
+            </TouchableOpacity>
             <TouchableOpacity
               onPress={() => setShowHistory(true)}
               style={styles.resetAllBtn}
@@ -992,7 +1306,7 @@ export default function HomeScreen() {
           activeOpacity={0.8}
         >
           <Feather name="share-2" size={17} color="#fff" />
-          <Text style={styles.shareBtnText}>Share Results</Text>
+          <Text style={styles.shareBtnText}>Submit & Share Results</Text>
         </TouchableOpacity>
 
         <Text style={[styles.hint, { color: mutedColor }]}>
