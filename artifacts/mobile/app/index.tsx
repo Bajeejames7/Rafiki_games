@@ -5,12 +5,15 @@ import {
   Alert,
   Animated,
   Image,
+  KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
   StatusBar,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
   useColorScheme,
@@ -23,6 +26,7 @@ import colors from "@/constants/colors";
 const schoolLogo = require("@/assets/images/school-logo.png");
 
 const STORAGE_KEY = "@virtue_points";
+const TEACHER_KEY = "@virtue_teacher";
 
 interface Team {
   id: "wisdom" | "justice" | "fortitude" | "temperance";
@@ -45,6 +49,180 @@ const RANK_LABELS = ["1st", "2nd", "3rd", "4th"];
 function getRankedTeams(scores: Scores): Team[] {
   return [...TEAMS].sort((a, b) => (scores[b.id] ?? 0) - (scores[a.id] ?? 0));
 }
+
+function TeacherSetupModal({
+  visible,
+  initial,
+  onSave,
+}: {
+  visible: boolean;
+  initial: { name: string; className: string };
+  onSave: (name: string, className: string) => void;
+}) {
+  const [name, setName] = useState(initial.name);
+  const [className, setClassName] = useState(initial.className);
+
+  useEffect(() => {
+    setName(initial.name);
+    setClassName(initial.className);
+  }, [initial.name, initial.className]);
+
+  const canSave = name.trim().length > 0 && className.trim().length > 0;
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" statusBarTranslucent>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={setupStyles.overlay}
+      >
+        <Pressable style={StyleSheet.absoluteFill} onPress={() => { if (!visible) onSave(name, className); }} />
+        <View style={setupStyles.sheet}>
+          <Image source={schoolLogo} style={setupStyles.modalLogo} resizeMode="contain" />
+
+          <Text style={setupStyles.title}>Welcome!</Text>
+          <Text style={setupStyles.subtitle}>
+            Enter your details before awarding points.
+          </Text>
+
+          <View style={setupStyles.fields}>
+            <View style={setupStyles.field}>
+              <Text style={setupStyles.label}>Your Name</Text>
+              <View style={setupStyles.inputWrap}>
+                <Feather name="user" size={16} color="#8B949E" style={setupStyles.inputIcon} />
+                <TextInput
+                  style={setupStyles.input}
+                  placeholder="e.g. Mrs. Johnson"
+                  placeholderTextColor="#8B949E"
+                  value={name}
+                  onChangeText={setName}
+                  returnKeyType="next"
+                  autoCapitalize="words"
+                />
+              </View>
+            </View>
+
+            <View style={setupStyles.field}>
+              <Text style={setupStyles.label}>Class / Grade</Text>
+              <View style={setupStyles.inputWrap}>
+                <Feather name="book" size={16} color="#8B949E" style={setupStyles.inputIcon} />
+                <TextInput
+                  style={setupStyles.input}
+                  placeholder="e.g. Grade 5A"
+                  placeholderTextColor="#8B949E"
+                  value={className}
+                  onChangeText={setClassName}
+                  returnKeyType="done"
+                  onSubmitEditing={() => canSave && onSave(name.trim(), className.trim())}
+                  autoCapitalize="words"
+                />
+              </View>
+            </View>
+          </View>
+
+          <TouchableOpacity
+            style={[setupStyles.saveBtn, !canSave && setupStyles.saveBtnDisabled]}
+            onPress={() => canSave && onSave(name.trim(), className.trim())}
+            activeOpacity={0.8}
+            disabled={!canSave}
+          >
+            <Text style={setupStyles.saveBtnText}>Let's Go →</Text>
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+const setupStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.75)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  sheet: {
+    backgroundColor: "#161B22",
+    borderRadius: 24,
+    padding: 28,
+    width: "100%",
+    maxWidth: 420,
+    borderWidth: 1,
+    borderColor: "#30363D",
+    alignItems: "center",
+    gap: 8,
+  },
+  modalLogo: {
+    width: 130,
+    height: 50,
+    marginBottom: 4,
+  },
+  title: {
+    fontSize: 24,
+    fontFamily: "Inter_700Bold",
+    color: "#f0f0f0",
+    letterSpacing: -0.5,
+    marginTop: 4,
+  },
+  subtitle: {
+    fontSize: 14,
+    fontFamily: "Inter_400Regular",
+    color: "#8B949E",
+    textAlign: "center",
+    marginBottom: 8,
+  },
+  fields: {
+    width: "100%",
+    gap: 14,
+    marginBottom: 8,
+  },
+  field: {
+    gap: 6,
+  },
+  label: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: "#8B949E",
+    letterSpacing: 0.5,
+  },
+  inputWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#21262D",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#30363D",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 10,
+  },
+  inputIcon: {
+    flexShrink: 0,
+  },
+  input: {
+    flex: 1,
+    fontSize: 15,
+    fontFamily: "Inter_400Regular",
+    color: "#f0f0f0",
+  },
+  saveBtn: {
+    backgroundColor: "#5B8AF5",
+    borderRadius: 14,
+    paddingVertical: 14,
+    width: "100%",
+    alignItems: "center",
+    marginTop: 4,
+  },
+  saveBtnDisabled: {
+    opacity: 0.4,
+  },
+  saveBtnText: {
+    fontSize: 16,
+    fontFamily: "Inter_700Bold",
+    color: "#fff",
+    letterSpacing: 0.3,
+  },
+});
 
 function ScoreButton({
   label,
@@ -324,24 +502,43 @@ export default function HomeScreen() {
     fortitude: 0,
     temperance: 0,
   });
+  const [teacherName, setTeacherName] = useState("");
+  const [teacherClass, setTeacherClass] = useState("");
+  const [showSetup, setShowSetup] = useState(false);
+
   const insets = useSafeAreaInsets();
   const colorScheme = useColorScheme();
   const isDark = colorScheme === "dark";
 
   const bg = isDark ? colors.dark.background : "#0D1117";
-  const cardBg = isDark ? colors.dark.card : "#161B22";
-  const textColor = "#f0f0f0";
   const mutedColor = "#8B949E";
 
   useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY).then((raw) => {
-      if (raw) {
+    Promise.all([
+      AsyncStorage.getItem(STORAGE_KEY),
+      AsyncStorage.getItem(TEACHER_KEY),
+    ]).then(([rawScores, rawTeacher]) => {
+      if (rawScores) {
+        try { setScores(JSON.parse(rawScores)); } catch {}
+      }
+      if (rawTeacher) {
         try {
-          setScores(JSON.parse(raw));
+          const t = JSON.parse(rawTeacher);
+          setTeacherName(t.name ?? "");
+          setTeacherClass(t.className ?? "");
         } catch {}
+      } else {
+        setShowSetup(true);
       }
     });
   }, []);
+
+  const handleSaveTeacher = (name: string, className: string) => {
+    setTeacherName(name);
+    setTeacherClass(className);
+    setShowSetup(false);
+    AsyncStorage.setItem(TEACHER_KEY, JSON.stringify({ name, className }));
+  };
 
   const updateScores = useCallback((newScores: Scores) => {
     setScores(newScores);
@@ -413,6 +610,12 @@ export default function HomeScreen() {
     <View style={[styles.container, { backgroundColor: bg }]}>
       <StatusBar barStyle="light-content" backgroundColor={bg} />
 
+      <TeacherSetupModal
+        visible={showSetup}
+        initial={{ name: teacherName, className: teacherClass }}
+        onSave={handleSaveTeacher}
+      />
+
       <View style={[styles.header, { paddingTop: topInset + 12 }]}>
         <View style={styles.headerTop}>
           <Image
@@ -420,18 +623,41 @@ export default function HomeScreen() {
             style={styles.schoolLogo}
             resizeMode="contain"
           />
-          <TouchableOpacity
-            onPress={handleResetAll}
-            style={styles.resetAllBtn}
-            activeOpacity={0.7}
-          >
-            <Feather name="refresh-ccw" size={16} color={mutedColor} />
-          </TouchableOpacity>
+          <View style={styles.headerActions}>
+            <TouchableOpacity
+              onPress={() => setShowSetup(true)}
+              style={styles.resetAllBtn}
+              activeOpacity={0.7}
+            >
+              <Feather name="user" size={16} color={mutedColor} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={handleResetAll}
+              style={styles.resetAllBtn}
+              activeOpacity={0.7}
+            >
+              <Feather name="refresh-ccw" size={16} color={mutedColor} />
+            </TouchableOpacity>
+          </View>
         </View>
         <Text style={styles.headerTitle}>Virtue Points</Text>
-        <Text style={[styles.headerSubtitle, { color: mutedColor }]}>
-          {totalPoints} total point{totalPoints !== 1 ? "s" : ""} awarded
-        </Text>
+        {teacherName ? (
+          <View style={styles.teacherBadge}>
+            <Feather name="user" size={12} color={mutedColor} />
+            <Text style={[styles.teacherBadgeText, { color: mutedColor }]}>
+              {teacherName} · {teacherClass}
+            </Text>
+          </View>
+        ) : (
+          <Text style={[styles.headerSubtitle, { color: mutedColor }]}>
+            {totalPoints} total point{totalPoints !== 1 ? "s" : ""} awarded
+          </Text>
+        )}
+        {teacherName ? (
+          <Text style={[styles.headerSubtitle, { color: mutedColor }]}>
+            {totalPoints} total point{totalPoints !== 1 ? "s" : ""} awarded
+          </Text>
+        ) : null}
       </View>
 
       <ScrollView
@@ -476,6 +702,20 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: 12,
+  },
+  headerActions: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  teacherBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    marginTop: 3,
+  },
+  teacherBadgeText: {
+    fontSize: 13,
+    fontFamily: "Inter_500Medium",
   },
   schoolLogo: {
     width: 160,
