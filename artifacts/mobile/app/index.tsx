@@ -29,6 +29,219 @@ const schoolBg = require("@/assets/images/school-bg.jpg");
 
 const STORAGE_KEY = "@virtue_points";
 const TEACHER_KEY = "@virtue_teacher";
+const LOG_KEY = "@virtue_log";
+
+interface LogEntry {
+  id: string;
+  teacherName: string;
+  teacherClass: string;
+  teamId: string;
+  teamName: string;
+  amount: number;
+  timestamp: number;
+}
+
+function formatTime(ts: number): string {
+  const now = Date.now();
+  const diff = Math.floor((now - ts) / 1000);
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  const d = new Date(ts);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function HistoryModal({
+  visible,
+  log,
+  onClose,
+  onClear,
+}: {
+  visible: boolean;
+  log: LogEntry[];
+  onClose: () => void;
+  onClear: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" statusBarTranslucent>
+      <View style={histStyles.overlay}>
+        <Pressable style={histStyles.backdrop} onPress={onClose} />
+        <View style={[histStyles.sheet, { paddingBottom: insets.bottom + 16 }]}>
+          <View style={histStyles.sheetHeader}>
+            <View>
+              <Text style={histStyles.sheetTitle}>Points Log</Text>
+              <Text style={histStyles.sheetSub}>{log.length} event{log.length !== 1 ? "s" : ""} recorded</Text>
+            </View>
+            <View style={histStyles.headerBtns}>
+              {log.length > 0 && (
+                <TouchableOpacity onPress={onClear} style={histStyles.clearBtn} activeOpacity={0.7}>
+                  <Feather name="trash-2" size={14} color="#ef4444" />
+                  <Text style={histStyles.clearBtnText}>Clear</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity onPress={onClose} style={histStyles.closeBtn} activeOpacity={0.7}>
+                <Feather name="x" size={18} color="#8B949E" />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {log.length === 0 ? (
+            <View style={histStyles.empty}>
+              <Text style={histStyles.emptyIcon}>📋</Text>
+              <Text style={histStyles.emptyText}>No events yet</Text>
+              <Text style={histStyles.emptySub}>Points you award will appear here</Text>
+            </View>
+          ) : (
+            <ScrollView showsVerticalScrollIndicator={false} style={histStyles.list}>
+              {[...log].reverse().map((entry) => {
+                const tc = colors.teams[entry.teamId as keyof typeof colors.teams];
+                const sign = entry.amount > 0 ? "+" : "";
+                return (
+                  <View key={entry.id} style={[histStyles.entry, { borderLeftColor: tc?.primary ?? "#fff" }]}>
+                    <View style={histStyles.entryLeft}>
+                      <Text style={[histStyles.entryPoints, { color: tc?.primary ?? "#fff" }]}>
+                        {sign}{entry.amount} → {entry.teamName}
+                      </Text>
+                      <View style={histStyles.entryMeta}>
+                        <Feather name="user" size={11} color="#8B949E" />
+                        <Text style={histStyles.entryMetaText}>
+                          {entry.teacherName} · {entry.teacherClass}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={histStyles.entryTime}>{formatTime(entry.timestamp)}</Text>
+                  </View>
+                );
+              })}
+            </ScrollView>
+          )}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const histStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(0,0,0,0.6)",
+  },
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  sheet: {
+    backgroundColor: "#161B22",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    borderTopWidth: 1,
+    borderColor: "#30363D",
+    paddingTop: 20,
+    paddingHorizontal: 20,
+    maxHeight: "80%",
+  },
+  sheetHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    marginBottom: 16,
+  },
+  sheetTitle: {
+    fontSize: 20,
+    fontFamily: "Inter_700Bold",
+    color: "#f0f0f0",
+    letterSpacing: -0.3,
+  },
+  sheetSub: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: "#8B949E",
+    marginTop: 2,
+  },
+  headerBtns: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  clearBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#2D1B1B",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  clearBtnText: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: "#ef4444",
+  },
+  closeBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#21262D",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  list: {
+    flex: 1,
+  },
+  entry: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderLeftWidth: 3,
+    paddingLeft: 12,
+    paddingVertical: 10,
+    marginBottom: 2,
+    backgroundColor: "#21262D33",
+    borderRadius: 8,
+  },
+  entryLeft: {
+    flex: 1,
+    gap: 3,
+  },
+  entryPoints: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+  },
+  entryMeta: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  entryMetaText: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: "#8B949E",
+  },
+  entryTime: {
+    fontSize: 11,
+    fontFamily: "Inter_400Regular",
+    color: "#8B949E",
+    marginLeft: 8,
+  },
+  empty: {
+    alignItems: "center",
+    paddingVertical: 40,
+    gap: 6,
+  },
+  emptyIcon: { fontSize: 36 },
+  emptyText: {
+    fontSize: 16,
+    fontFamily: "Inter_600SemiBold",
+    color: "#8B949E",
+  },
+  emptySub: {
+    fontSize: 13,
+    fontFamily: "Inter_400Regular",
+    color: "#8B949E66",
+  },
+});
 
 interface Team {
   id: "wisdom" | "justice" | "fortitude" | "temperance";
@@ -507,6 +720,8 @@ export default function HomeScreen() {
   const [teacherName, setTeacherName] = useState("");
   const [teacherClass, setTeacherClass] = useState("");
   const [showSetup, setShowSetup] = useState(false);
+  const [log, setLog] = useState<LogEntry[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
 
   const insets = useSafeAreaInsets();
   const colorScheme = useColorScheme();
@@ -519,7 +734,8 @@ export default function HomeScreen() {
     Promise.all([
       AsyncStorage.getItem(STORAGE_KEY),
       AsyncStorage.getItem(TEACHER_KEY),
-    ]).then(([rawScores, rawTeacher]) => {
+      AsyncStorage.getItem(LOG_KEY),
+    ]).then(([rawScores, rawTeacher, rawLog]) => {
       if (rawScores) {
         try { setScores(JSON.parse(rawScores)); } catch {}
       }
@@ -532,6 +748,26 @@ export default function HomeScreen() {
       } else {
         setShowSetup(true);
       }
+      if (rawLog) {
+        try { setLog(JSON.parse(rawLog)); } catch {}
+      }
+    });
+  }, []);
+
+  const addLogEntry = useCallback((teamId: string, teamName: string, amount: number, tName: string, tClass: string) => {
+    setLog((prev) => {
+      const entry: LogEntry = {
+        id: `${Date.now()}-${Math.random()}`,
+        teacherName: tName,
+        teacherClass: tClass,
+        teamId,
+        teamName,
+        amount,
+        timestamp: Date.now(),
+      };
+      const next = [...prev, entry];
+      AsyncStorage.setItem(LOG_KEY, JSON.stringify(next));
+      return next;
     });
   }, []);
 
@@ -550,12 +786,31 @@ export default function HomeScreen() {
   const handleAdd = (teamId: string, amount: number) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     updateScores({ ...scores, [teamId]: (scores[teamId] ?? 0) + amount });
+    const team = TEAMS.find((t) => t.id === teamId);
+    addLogEntry(teamId, team?.name ?? teamId, amount, teacherName, teacherClass);
   };
 
   const handleSubtract = (teamId: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const current = scores[teamId] ?? 0;
-    updateScores({ ...scores, [teamId]: Math.max(0, current - 1) });
+    if (current === 0) return;
+    updateScores({ ...scores, [teamId]: current - 1 });
+    const team = TEAMS.find((t) => t.id === teamId);
+    addLogEntry(teamId, team?.name ?? teamId, -1, teacherName, teacherClass);
+  };
+
+  const handleClearLog = () => {
+    Alert.alert("Clear log?", "All recorded events will be deleted.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Clear",
+        style: "destructive",
+        onPress: () => {
+          setLog([]);
+          AsyncStorage.removeItem(LOG_KEY);
+        },
+      },
+    ]);
   };
 
   const handleResetTeam = (teamId: string, teamName: string) => {
@@ -620,6 +875,13 @@ export default function HomeScreen() {
         onSave={handleSaveTeacher}
       />
 
+      <HistoryModal
+        visible={showHistory}
+        log={log}
+        onClose={() => setShowHistory(false)}
+        onClear={handleClearLog}
+      />
+
       <View style={[styles.header, { paddingTop: topInset + 12 }]}>
         <View style={styles.headerTop}>
           <Image
@@ -628,6 +890,14 @@ export default function HomeScreen() {
             resizeMode="contain"
           />
           <View style={styles.headerActions}>
+            <TouchableOpacity
+              onPress={() => setShowHistory(true)}
+              style={styles.resetAllBtn}
+              activeOpacity={0.7}
+            >
+              <Feather name="clock" size={16} color={mutedColor} />
+              {log.length > 0 && <View style={styles.logBadge} />}
+            </TouchableOpacity>
             <TouchableOpacity
               onPress={() => setShowSetup(true)}
               style={styles.resetAllBtn}
@@ -751,6 +1021,15 @@ const styles = StyleSheet.create({
     backgroundColor: "#21262D",
     alignItems: "center",
     justifyContent: "center",
+  },
+  logBadge: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: "#5B8AF5",
   },
   scrollContent: {
     paddingHorizontal: 16,
