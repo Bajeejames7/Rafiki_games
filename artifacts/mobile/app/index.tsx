@@ -609,7 +609,8 @@ export default function HomeScreen() {
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
 
   return (
-    <ImageBackground source={schoolBg} style={styles.container} resizeMode="cover">
+    <View style={styles.container}>
+      <Image source={schoolBg} style={styles.bgImage} resizeMode="cover" />
       <View style={styles.overlay} />
       <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
 
@@ -688,7 +689,7 @@ export default function HomeScreen() {
           Long-press a card to reset that team
         </Text>
       </ScrollView>
-    </ImageBackground>
+    </View>
   );
 }
 
@@ -698,7 +699,11 @@ const styles = StyleSheet.create({
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0, 0, 0, 0.72)",
+    backgroundColor: "rgba(0, 0, 0, 0.45)",
+  },
+  bgImage: {
+    ...StyleSheet.absoluteFillObject,
+    top: -100,
   },
   header: {
     paddingHorizontal: 20,
