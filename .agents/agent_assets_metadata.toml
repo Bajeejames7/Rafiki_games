@@ -1,0 +1,8 @@
+uploads = []
+outputs = []
+
+[[generated]]
+id = "WcC4qAbtldIXw2ekLErWp"
+uri = "file://artifacts/mobile/assets/images/icon.png"
+type = "image"
+title = "virtue points app icon"
