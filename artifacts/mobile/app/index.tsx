@@ -11,6 +11,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  Share,
   StatusBar,
   StyleSheet,
   Text,
@@ -799,6 +800,36 @@ export default function HomeScreen() {
     addLogEntry(teamId, team?.name ?? teamId, -1, teacherName, teacherClass);
   };
 
+  const handleShare = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const now = new Date();
+    const dateStr = now.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+    const timeStr = now.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+
+    const medal = (rank: number) => ["🥇", "🥈", "🥉", "4️⃣"][rank] ?? "";
+    const ranked = getRankedTeams(scores);
+    const lines = ranked.map((team, i) =>
+      `${medal(i)} ${team.name}: ${scores[team.id] ?? 0} pts`
+    ).join("\n");
+
+    const header = teacherName
+      ? `📊 Virtue Points — ${teacherName} (${teacherClass})`
+      : "📊 Virtue Points Results";
+
+    const message = [
+      header,
+      `📅 ${dateStr} at ${timeStr}`,
+      "",
+      lines,
+      "",
+      `Total points awarded: ${Object.values(scores).reduce((a, b) => a + b, 0)}`,
+    ].join("\n");
+
+    try {
+      await Share.share({ message, title: "Virtue Points Results" });
+    } catch {}
+  };
+
   const handleClearLog = () => {
     Alert.alert("Clear log?", "All recorded events will be deleted.", [
       { text: "Cancel", style: "cancel" },
@@ -954,6 +985,15 @@ export default function HomeScreen() {
             onReset={() => handleResetTeam(team.id, team.name)}
           />
         ))}
+
+        <TouchableOpacity
+          onPress={handleShare}
+          style={styles.shareBtn}
+          activeOpacity={0.8}
+        >
+          <Feather name="share-2" size={17} color="#fff" />
+          <Text style={styles.shareBtnText}>Share Results</Text>
+        </TouchableOpacity>
 
         <Text style={[styles.hint, { color: mutedColor }]}>
           Long-press a card to reset that team
@@ -1113,6 +1153,22 @@ const styles = StyleSheet.create({
   },
   scoreBtnTextSmall: {
     fontSize: 14,
+  },
+  shareBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: "#5B8AF5",
+    borderRadius: 16,
+    paddingVertical: 15,
+    marginTop: 4,
+  },
+  shareBtnText: {
+    fontSize: 16,
+    fontFamily: "Inter_700Bold",
+    color: "#fff",
+    letterSpacing: 0.2,
   },
   hint: {
     textAlign: "center",
