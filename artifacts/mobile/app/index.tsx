@@ -6,6 +6,7 @@ import {
   Animated,
   Image,
   ImageBackground,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -993,6 +994,147 @@ function TeamCard({
   );
 }
 
+function TeacherInputCard({
+  name,
+  className,
+  onSave,
+}: {
+  name: string;
+  className: string;
+  onSave: (n: string, c: string) => void;
+}) {
+  const [draftName, setDraftName] = React.useState(name);
+  const [draftClass, setDraftClass] = React.useState(className);
+  const saved = name === draftName.trim() && className === draftClass.trim() && name.length > 0;
+
+  React.useEffect(() => { setDraftName(name); }, [name]);
+  React.useEffect(() => { setDraftClass(className); }, [className]);
+
+  const handleSave = () => {
+    if (draftName.trim()) {
+      onSave(draftName.trim(), draftClass.trim());
+      Keyboard.dismiss();
+    }
+  };
+
+  return (
+    <View style={ticStyles.card}>
+      <View style={ticStyles.cardHeader}>
+        <Feather name="user" size={14} color="#8B949E" />
+        <Text style={ticStyles.cardTitle}>Who's awarding points?</Text>
+        {saved && (
+          <View style={ticStyles.savedBadge}>
+            <Feather name="check" size={11} color="#42C97A" />
+            <Text style={ticStyles.savedText}>Saved</Text>
+          </View>
+        )}
+      </View>
+      <View style={ticStyles.row}>
+        <View style={ticStyles.inputWrap}>
+          <Feather name="user" size={14} color="#8B949E" />
+          <TextInput
+            style={ticStyles.input}
+            placeholder="Teacher name"
+            placeholderTextColor="#555"
+            value={draftName}
+            onChangeText={setDraftName}
+            returnKeyType="next"
+            onSubmitEditing={handleSave}
+          />
+        </View>
+        <View style={ticStyles.inputWrap}>
+          <Feather name="book-open" size={14} color="#8B949E" />
+          <TextInput
+            style={ticStyles.input}
+            placeholder="Class / Grade"
+            placeholderTextColor="#555"
+            value={draftClass}
+            onChangeText={setDraftClass}
+            returnKeyType="done"
+            onSubmitEditing={handleSave}
+          />
+        </View>
+      </View>
+      {!saved && (
+        <TouchableOpacity style={ticStyles.saveBtn} onPress={handleSave} activeOpacity={0.8}>
+          <Text style={ticStyles.saveBtnText}>Confirm →</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+}
+
+const ticStyles = StyleSheet.create({
+  card: {
+    backgroundColor: "rgba(22,27,34,0.94)",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#30363D",
+    padding: 14,
+    marginBottom: 10,
+    gap: 10,
+  },
+  cardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  cardTitle: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: "#c9d1d9",
+  },
+  savedBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: "rgba(66,201,122,0.15)",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  savedText: {
+    fontSize: 11,
+    fontFamily: "Inter_600SemiBold",
+    color: "#42C97A",
+  },
+  row: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  inputWrap: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#21262D",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#30363D",
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    gap: 7,
+  },
+  input: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: "Inter_500Medium",
+    color: "#f0f0f0",
+  },
+  saveBtn: {
+    backgroundColor: "#5B8AF5",
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  saveBtnText: {
+    fontSize: 13,
+    fontFamily: "Inter_700Bold",
+    color: "#fff",
+    letterSpacing: 0.3,
+  },
+});
+
 function DailyTotalsPanel({ log }: { log: LogEntry[] }) {
   const todayKey = getDayKey(Date.now());
   const todayEntries = log.filter((e) => getDayKey(e.timestamp) === todayKey && e.amount > 0);
@@ -1121,8 +1263,6 @@ export default function HomeScreen() {
           setTeacherName(t.name ?? "");
           setTeacherClass(t.className ?? "");
         } catch {}
-      } else {
-        setShowSetup(true);
       }
       if (rawLog) {
         try { setLog(JSON.parse(rawLog)); } catch {}
@@ -1293,12 +1433,6 @@ export default function HomeScreen() {
       <View style={styles.overlay} />
       <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
 
-      <TeacherSetupModal
-        visible={showSetup}
-        initial={{ name: teacherName, className: teacherClass }}
-        onSave={handleSaveTeacher}
-      />
-
       <HistoryModal
         visible={showHistory}
         log={log}
@@ -1336,13 +1470,6 @@ export default function HomeScreen() {
               {log.length > 0 && <View style={styles.logBadge} />}
             </TouchableOpacity>
             <TouchableOpacity
-              onPress={() => setShowSetup(true)}
-              style={styles.resetAllBtn}
-              activeOpacity={0.7}
-            >
-              <Feather name="user" size={16} color={mutedColor} />
-            </TouchableOpacity>
-            <TouchableOpacity
               onPress={handleResetAll}
               style={styles.resetAllBtn}
               activeOpacity={0.7}
@@ -1351,7 +1478,7 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
         </View>
-        <Text style={styles.headerTitle}>Virtue Points</Text>
+        <Text style={styles.headerTitle}>Rafiki Games</Text>
         {teacherName ? (
           <View style={styles.teacherBadge}>
             <Feather name="user" size={12} color={mutedColor} />
@@ -1381,6 +1508,12 @@ export default function HomeScreen() {
         <LeaderBanner team={isTie ? null : leader} score={leaderScore} isTie={isTie} />
 
         <DailyTotalsPanel log={log} />
+
+        <TeacherInputCard
+          name={teacherName}
+          className={teacherClass}
+          onSave={handleSaveTeacher}
+        />
 
         {rankedTeams.map((team, idx) => (
           <TeamCard
