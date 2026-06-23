@@ -993,6 +993,98 @@ function TeamCard({
   );
 }
 
+function DailyTotalsPanel({ log }: { log: LogEntry[] }) {
+  const todayKey = getDayKey(Date.now());
+  const todayEntries = log.filter((e) => getDayKey(e.timestamp) === todayKey && e.amount > 0);
+  const todayTotals = calcTotals(todayEntries);
+  const todayGrand = Object.values(todayTotals).reduce((a, b) => a + b, 0);
+
+  if (todayGrand === 0) return null;
+
+  const sorted = [...TEAMS].sort((a, b) => (todayTotals[b.id] ?? 0) - (todayTotals[a.id] ?? 0));
+  const maxPts = todayTotals[sorted[0].id] ?? 1;
+
+  return (
+    <View style={dpStyles.panel}>
+      <View style={dpStyles.panelHeader}>
+        <Text style={dpStyles.panelTitle}>Today's Points</Text>
+        <Text style={dpStyles.panelTotal}>{todayGrand} total</Text>
+      </View>
+      {sorted.filter((t) => (todayTotals[t.id] ?? 0) > 0).map((team) => {
+        const tc = colors.teams[team.id];
+        const pts = todayTotals[team.id] ?? 0;
+        const barPct = Math.max((pts / maxPts) * 100, 6);
+        return (
+          <View key={team.id} style={dpStyles.row}>
+            <Text style={[dpStyles.teamLabel, { color: tc.text }]}>{team.name}</Text>
+            <View style={dpStyles.barWrap}>
+              <View style={[dpStyles.bar, { width: `${barPct}%` as any, backgroundColor: tc.primary }]} />
+            </View>
+            <Text style={[dpStyles.pts, { color: tc.primary }]}>{pts}</Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+const dpStyles = StyleSheet.create({
+  panel: {
+    backgroundColor: "rgba(22,27,34,0.92)",
+    borderRadius: 16,
+    padding: 14,
+    marginHorizontal: 0,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: "#30363D",
+    gap: 8,
+  },
+  panelHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 2,
+  },
+  panelTitle: {
+    fontSize: 13,
+    fontFamily: "Inter_700Bold",
+    color: "#f0f0f0",
+    letterSpacing: 0.3,
+  },
+  panelTotal: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: "#8B949E",
+  },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  teamLabel: {
+    width: 88,
+    fontSize: 12,
+    fontFamily: "Inter_600SemiBold",
+  },
+  barWrap: {
+    flex: 1,
+    height: 7,
+    backgroundColor: "#30363D",
+    borderRadius: 4,
+    overflow: "hidden",
+  },
+  bar: {
+    height: 7,
+    borderRadius: 4,
+  },
+  pts: {
+    width: 30,
+    fontSize: 13,
+    fontFamily: "Inter_700Bold",
+    textAlign: "right",
+  },
+});
+
 export default function HomeScreen() {
   const [scores, setScores] = useState<Scores>({
     wisdom: 0,
@@ -1288,6 +1380,8 @@ export default function HomeScreen() {
       >
         <LeaderBanner team={isTie ? null : leader} score={leaderScore} isTie={isTie} />
 
+        <DailyTotalsPanel log={log} />
+
         {rankedTeams.map((team, idx) => (
           <TeamCard
             key={team.id}
@@ -1354,8 +1448,8 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_500Medium",
   },
   schoolLogo: {
-    width: 160,
-    height: 60,
+    width: 180,
+    height: 80,
   },
   headerTitle: {
     fontSize: 28,
