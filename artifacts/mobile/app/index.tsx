@@ -29,9 +29,64 @@ import colors from "@/constants/colors";
 const schoolLogo = require("@/assets/images/school-logo.png");
 const schoolBg = require("@/assets/images/school-bg.jpg");
 
-const STORAGE_KEY = "@virtue_points";
 const TEACHER_KEY = "@virtue_teacher";
-const LOG_KEY = "@virtue_log";
+
+const API_BASE = process.env.EXPO_PUBLIC_DOMAIN
+  ? `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`
+  : "/api";
+
+async function apiFetchScores(): Promise<Scores | null> {
+  try {
+    const res = await fetch(`${API_BASE}/scores`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch { return null; }
+}
+
+async function apiPostEvent(
+  teamId: string, teamName: string, amount: number,
+  teacherName: string, teacherClass: string
+): Promise<Scores | null> {
+  try {
+    const res = await fetch(`${API_BASE}/scores/event`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ teamId, teamName, amount, teacherName, teacherClass }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch { return null; }
+}
+
+async function apiFetchLog(): Promise<LogEntry[]> {
+  try {
+    const res = await fetch(`${API_BASE}/log`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return [];
+    const data: any[] = await res.json();
+    return data.map((e) => ({
+      id: String(e.id),
+      teacherName: e.teacherName ?? "",
+      teacherClass: e.teacherClass ?? "",
+      teamId: e.teamId,
+      teamName: e.teamName,
+      amount: e.amount,
+      timestamp: new Date(e.createdAt).getTime(),
+    }));
+  } catch { return []; }
+}
+
+async function apiResetScores(): Promise<Scores | null> {
+  try {
+    const res = await fetch(`${API_BASE}/scores/reset`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch { return null; }
+}
 
 interface LogEntry {
   id: string;
@@ -1371,6 +1426,8 @@ export default function HomeScreen() {
   const [log, setLog] = useState<LogEntry[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [showWeekly, setShowWeekly] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [online, setOnline] = useState(true);
 
   const insets = useSafeAreaInsets();
   const colorScheme = useColorScheme();
@@ -1379,44 +1436,36 @@ export default function HomeScreen() {
   const bg = isDark ? colors.dark.background : "#0D1117";
   const mutedColor = "#8B949E";
 
+  const refreshFromServer = useCallback(async () => {
+    const [serverScores, serverLog] = await Promise.all([
+      apiFetchScores(),
+      apiFetchLog(),
+    ]);
+    if (serverScores) {
+      setScores(serverScores);
+      setOnline(true);
+    } else {
+      setOnline(false);
+    }
+    if (serverLog.length > 0) {
+      setLog(serverLog);
+    }
+  }, []);
+
   useEffect(() => {
-    Promise.all([
-      AsyncStorage.getItem(STORAGE_KEY),
-      AsyncStorage.getItem(TEACHER_KEY),
-      AsyncStorage.getItem(LOG_KEY),
-    ]).then(([rawScores, rawTeacher, rawLog]) => {
-      if (rawScores) {
-        try { setScores(JSON.parse(rawScores)); } catch {}
-      }
-      if (rawTeacher) {
+    AsyncStorage.getItem(TEACHER_KEY).then((raw) => {
+      if (raw) {
         try {
-          const t = JSON.parse(rawTeacher);
+          const t = JSON.parse(raw);
           setTeacherName(t.name ?? "");
           setTeacherClass(t.className ?? "");
         } catch {}
       }
-      if (rawLog) {
-        try { setLog(JSON.parse(rawLog)); } catch {}
-      }
     });
-  }, []);
-
-  const addLogEntry = useCallback((teamId: string, teamName: string, amount: number, tName: string, tClass: string) => {
-    setLog((prev) => {
-      const entry: LogEntry = {
-        id: `${Date.now()}-${Math.random()}`,
-        teacherName: tName,
-        teacherClass: tClass,
-        teamId,
-        teamName,
-        amount,
-        timestamp: Date.now(),
-      };
-      const next = [...prev, entry];
-      AsyncStorage.setItem(LOG_KEY, JSON.stringify(next));
-      return next;
-    });
-  }, []);
+    refreshFromServer();
+    const interval = setInterval(refreshFromServer, 3000);
+    return () => clearInterval(interval);
+  }, [refreshFromServer]);
 
   const handleSaveTeacher = (name: string, className: string) => {
     setTeacherName(name);
@@ -1425,25 +1474,34 @@ export default function HomeScreen() {
     AsyncStorage.setItem(TEACHER_KEY, JSON.stringify({ name, className }));
   };
 
-  const updateScores = useCallback((newScores: Scores) => {
-    setScores(newScores);
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(newScores));
-  }, []);
-
-  const handleAdd = (teamId: string, amount: number) => {
+  const handleAdd = async (teamId: string, amount: number) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    updateScores({ ...scores, [teamId]: (scores[teamId] ?? 0) + amount });
     const team = TEAMS.find((t) => t.id === teamId);
-    addLogEntry(teamId, team?.name ?? teamId, amount, teacherName, teacherClass);
+    setScores((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? 0) + amount }));
+    setSyncing(true);
+    const updated = await apiPostEvent(teamId, team?.name ?? teamId, amount, teacherName, teacherClass);
+    setSyncing(false);
+    if (updated) {
+      setScores(updated);
+      const freshLog = await apiFetchLog();
+      if (freshLog.length > 0) setLog(freshLog);
+    }
   };
 
-  const handleSubtract = (teamId: string) => {
+  const handleSubtract = async (teamId: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const current = scores[teamId] ?? 0;
     if (current === 0) return;
-    updateScores({ ...scores, [teamId]: current - 1 });
     const team = TEAMS.find((t) => t.id === teamId);
-    addLogEntry(teamId, team?.name ?? teamId, -1, teacherName, teacherClass);
+    setScores((prev) => ({ ...prev, [teamId]: Math.max(0, (prev[teamId] ?? 0) - 1) }));
+    setSyncing(true);
+    const updated = await apiPostEvent(teamId, team?.name ?? teamId, -1, teacherName, teacherClass);
+    setSyncing(false);
+    if (updated) {
+      setScores(updated);
+      const freshLog = await apiFetchLog();
+      if (freshLog.length > 0) setLog(freshLog);
+    }
   };
 
   const handleShare = async () => {
@@ -1502,7 +1560,6 @@ export default function HomeScreen() {
         style: "destructive",
         onPress: () => {
           setLog([]);
-          AsyncStorage.removeItem(LOG_KEY);
         },
       },
     ]);
@@ -1511,15 +1568,17 @@ export default function HomeScreen() {
   const handleResetTeam = (teamId: string, teamName: string) => {
     Alert.alert(
       `Reset ${teamName}?`,
-      "This will set their points to 0.",
+      "This will set their points to 0 for ALL devices.",
       [
         { text: "Cancel", style: "cancel" },
         {
           text: "Reset",
           style: "destructive",
-          onPress: () => {
+          onPress: async () => {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-            updateScores({ ...scores, [teamId]: 0 });
+            setScores((prev) => ({ ...prev, [teamId]: 0 }));
+            await apiPostEvent(teamId, teamName, -(scores[teamId] ?? 0), teacherName, teacherClass);
+            await refreshFromServer();
           },
         },
       ]
@@ -1529,20 +1588,17 @@ export default function HomeScreen() {
   const handleResetAll = () => {
     Alert.alert(
       "Reset All Teams?",
-      "This will set all teams' points back to zero.",
+      "This will reset ALL teams to zero on ALL devices.",
       [
         { text: "Cancel", style: "cancel" },
         {
           text: "Reset All",
           style: "destructive",
-          onPress: () => {
+          onPress: async () => {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-            updateScores({
-              wisdom: 0,
-              justice: 0,
-              fortitude: 0,
-              temperance: 0,
-            });
+            setScores({ wisdom: 0, justice: 0, fortitude: 0, temperance: 0 });
+            await apiResetScores();
+            await refreshFromServer();
           },
         },
       ]
@@ -1585,6 +1641,12 @@ export default function HomeScreen() {
             resizeMode="contain"
           />
           <View style={styles.headerActions}>
+            <View style={styles.syncDot}>
+              <View style={[
+                styles.syncDotInner,
+                { backgroundColor: syncing ? "#F5C518" : online ? "#42C97A" : "#E8503A" }
+              ]} />
+            </View>
             <TouchableOpacity
               onPress={() => setShowWeekly(true)}
               style={styles.resetAllBtn}
@@ -1714,6 +1776,17 @@ const styles = StyleSheet.create({
   schoolLogo: {
     width: 180,
     height: 80,
+  },
+  syncDot: {
+    justifyContent: "center",
+    alignItems: "center",
+    width: 20,
+    height: 20,
+  },
+  syncDotInner: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
   },
   headerTitle: {
     fontSize: 28,
