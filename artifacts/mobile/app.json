@@ -1,15 +1,15 @@
 {
   "expo": {
-    "name": "Rafiki school games tracker",
+    "name": "Rafiki Games",
     "slug": "rafikischoolgamestracker",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/school-logo.png",
     "scheme": "rafikischoolgamestracker",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/images/icon.png",
+      "image": "./assets/images/school-logo.png",
       "resizeMode": "contain",
       "backgroundColor": "#0D1117"
     },
@@ -18,10 +18,21 @@
       "bundleIdentifier": "com.rafikischoolgamestracker.app"
     },
     "android": {
-      "package": "com.rafikischoolgamestracker.app"
+      "package": "com.rafikischoolgamestracker.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/school-logo.png",
+        "backgroundColor": "#0D1117"
+      }
     },
     "web": {
-      "favicon": "./assets/images/icon.png"
+      "favicon": "./assets/images/school-logo.png",
+      "output": "static",
+      "bundler": "metro",
+      "name": "Rafiki Games",
+      "shortName": "Rafiki",
+      "description": "Virtue point tracker for Rafiki Foundation school",
+      "themeColor": "#0D1117",
+      "backgroundColor": "#0D1117"
     },
     "plugins": [
       [

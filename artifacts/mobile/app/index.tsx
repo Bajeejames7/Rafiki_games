@@ -1135,6 +1135,137 @@ const ticStyles = StyleSheet.create({
   },
 });
 
+function LiveScoresStrip({ scores }: { scores: Scores }) {
+  const ranked = [...TEAMS].sort((a, b) => (scores[b.id] ?? 0) - (scores[a.id] ?? 0));
+  const topScore = scores[ranked[0].id] ?? 0;
+  const total = Object.values(scores).reduce((a, b) => a + b, 0);
+
+  return (
+    <View style={lsStyles.card}>
+      <View style={lsStyles.cardHeader}>
+        <Text style={lsStyles.cardTitle}>🏆 Live Standings</Text>
+        <Text style={lsStyles.cardSub}>{total} pts total</Text>
+      </View>
+      {ranked.map((team, idx) => {
+        const tc = colors.teams[team.id];
+        const pts = scores[team.id] ?? 0;
+        const barPct = topScore > 0 ? Math.max((pts / topScore) * 100, pts > 0 ? 5 : 0) : 0;
+        const isLeader = idx === 0 && pts > 0;
+        const isTied = idx > 0 && pts === topScore && topScore > 0;
+        return (
+          <View key={team.id} style={lsStyles.row}>
+            <Text style={lsStyles.rank}>
+              {pts === 0 ? "—" : ["🥇","🥈","🥉","4"][idx]}
+            </Text>
+            <View style={lsStyles.rowBody}>
+              <View style={lsStyles.rowTop}>
+                <Text style={[lsStyles.teamName, { color: tc.text }]}>
+                  {team.name}{isTied ? " =" : ""}
+                </Text>
+                <View style={lsStyles.ptsRow}>
+                  {isLeader && <Text style={lsStyles.leadTag}>LEADING</Text>}
+                  <Text style={[lsStyles.pts, { color: tc.primary }]}>{pts}</Text>
+                </View>
+              </View>
+              <View style={lsStyles.barTrack}>
+                <View
+                  style={[
+                    lsStyles.barFill,
+                    { width: `${barPct}%` as any, backgroundColor: tc.primary },
+                    isLeader && { shadowColor: tc.primary, shadowOpacity: 0.6, shadowRadius: 6 },
+                  ]}
+                />
+              </View>
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+const lsStyles = StyleSheet.create({
+  card: {
+    backgroundColor: "rgba(22,27,34,0.96)",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#30363D",
+    padding: 16,
+    marginBottom: 10,
+    gap: 11,
+  },
+  cardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  cardTitle: {
+    fontSize: 14,
+    fontFamily: "Inter_700Bold",
+    color: "#f0f0f0",
+    letterSpacing: 0.2,
+  },
+  cardSub: {
+    fontSize: 12,
+    fontFamily: "Inter_500Medium",
+    color: "#8B949E",
+  },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  rank: {
+    fontSize: 18,
+    width: 28,
+    textAlign: "center",
+  },
+  rowBody: {
+    flex: 1,
+    gap: 5,
+  },
+  rowTop: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  teamName: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+  },
+  ptsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  leadTag: {
+    fontSize: 9,
+    fontFamily: "Inter_700Bold",
+    color: "#F5C518",
+    letterSpacing: 1.2,
+    backgroundColor: "rgba(245,197,24,0.15)",
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  pts: {
+    fontSize: 16,
+    fontFamily: "Inter_700Bold",
+    minWidth: 28,
+    textAlign: "right",
+  },
+  barTrack: {
+    height: 6,
+    backgroundColor: "#30363D",
+    borderRadius: 3,
+    overflow: "hidden",
+  },
+  barFill: {
+    height: 6,
+    borderRadius: 3,
+  },
+});
+
 function DailyTotalsPanel({ log }: { log: LogEntry[] }) {
   const todayKey = getDayKey(Date.now());
   const todayEntries = log.filter((e) => getDayKey(e.timestamp) === todayKey && e.amount > 0);
@@ -1505,7 +1636,7 @@ export default function HomeScreen() {
         ]}
         showsVerticalScrollIndicator={false}
       >
-        <LeaderBanner team={isTie ? null : leader} score={leaderScore} isTie={isTie} />
+        <LiveScoresStrip scores={scores} />
 
         <DailyTotalsPanel log={log} />
 
