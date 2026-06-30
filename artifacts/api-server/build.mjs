@@ -43,6 +43,7 @@ async function buildAll() {
       "*.node",
       "pg",
       "pg-native",
+      "express",
       "sharp",
       "better-sqlite3",
       "sqlite3",

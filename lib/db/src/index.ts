@@ -12,13 +12,16 @@ if (!process.env.DATABASE_URL) {
 
 const connectionString = process.env.DATABASE_URL;
 
-// Aiven (and most managed Postgres providers) require SSL.
-// We detect it from the connection string and configure accordingly.
-const ssl = connectionString.includes("sslmode=require")
-  ? { rejectUnauthorized: false }
-  : undefined;
+// Aiven requires SSL with a self-signed CA cert.
+// We strip sslmode from the connection string and handle SSL explicitly
+// via the Pool config to avoid pg's built-in SSL verification rejecting Aiven's cert.
+const cleanConnectionString = connectionString.replace(/[?&]sslmode=[^&]*/g, "");
+const needsSsl = connectionString.includes("sslmode=require") ||
+  connectionString.includes("aivencloud.com");
 
-export const pool = new Pool({ connectionString, ssl });
+const ssl = needsSsl ? { rejectUnauthorized: false } : undefined;
+
+export const pool = new Pool({ connectionString: cleanConnectionString, ssl });
 export const db = drizzle(pool, { schema });
 
 export * from "./schema";
