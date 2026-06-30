@@ -10,7 +10,15 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const connectionString = process.env.DATABASE_URL;
+
+// Aiven (and most managed Postgres providers) require SSL.
+// We detect it from the connection string and configure accordingly.
+const ssl = connectionString.includes("sslmode=require")
+  ? { rejectUnauthorized: false }
+  : undefined;
+
+export const pool = new Pool({ connectionString, ssl });
 export const db = drizzle(pool, { schema });
 
 export * from "./schema";

@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Rafiki Games",
-    "slug": "rafikischoolgamestracker",
+    "slug": "rafiki-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/school-logo.png",
@@ -47,6 +47,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "0e595355-29c3-410b-bf15-b35680bce3de"
+      }
+    },
+    "owner": "bajees-organization"
   }
 }

@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: virtue-team-tracker-api
+    runtime: node
+    rootDir: artifacts/api-server
+    buildCommand: npm install -g pnpm && pnpm install --frozen-lockfile=false && pnpm run build
+    startCommand: pnpm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false   # set this manually in Render dashboard — keep it secret
+    autoDeploy: true
