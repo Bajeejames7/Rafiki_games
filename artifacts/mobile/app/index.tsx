@@ -33,7 +33,7 @@ const TEACHER_KEY = "@virtue_teacher";
 
 const API_BASE = process.env.EXPO_PUBLIC_DOMAIN
   ? `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`
-  : "/api";
+  : "https://rafiki-games.onrender.com/api";
 
 async function apiFetchScores(): Promise<Scores | null> {
   try {
