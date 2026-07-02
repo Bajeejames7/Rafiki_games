@@ -25,6 +25,7 @@ router.get("/admin/teachers", requireAdmin, async (req, res): Promise<void> => {
 });
 
 const CreateTeacherBody = z.object({
+  username: z.string().min(2).regex(/^[a-zA-Z0-9._-]+$/, "Username: letters, numbers, . _ - only"),
   firstName: z.string().min(1),
   lastName: z.string().min(1),
   block: z.enum(BLOCKS),
@@ -39,27 +40,37 @@ router.post("/admin/teachers", requireAdmin, async (req, res): Promise<void> => 
     res.status(400).json({ error: parsed.error.message });
     return;
   }
-  const { firstName, lastName, block, password, role } = parsed.data;
+  const { username, firstName, lastName, block, password, role } = parsed.data;
   const hash = await bcrypt.hash(password, 10);
 
-  const [teacher] = await db.insert(teachersTable).values({
-    firstName,
-    lastName,
-    block,
-    passwordHash: hash,
-    role,
-    mustChangePassword: true,
-  }).returning({
-    id: teachersTable.id,
-    firstName: teachersTable.firstName,
-    lastName: teachersTable.lastName,
-    block: teachersTable.block,
-    role: teachersTable.role,
-    mustChangePassword: teachersTable.mustChangePassword,
-  });
+  try {
+    const [teacher] = await db.insert(teachersTable).values({
+      username: username.toLowerCase(),
+      firstName,
+      lastName,
+      block,
+      passwordHash: hash,
+      role,
+      mustChangePassword: true,
+    }).returning({
+      id: teachersTable.id,
+      username: teachersTable.username,
+      firstName: teachersTable.firstName,
+      lastName: teachersTable.lastName,
+      block: teachersTable.block,
+      role: teachersTable.role,
+      mustChangePassword: teachersTable.mustChangePassword,
+    });
 
-  req.log.info({ teacherId: teacher.id }, "Teacher created");
-  res.status(201).json(teacher);
+    req.log.info({ teacherId: teacher.id }, "Teacher created");
+    res.status(201).json(teacher);
+  } catch (e: any) {
+    if (e?.code === "23505") {
+      res.status(409).json({ error: "Username already taken" });
+    } else {
+      throw e;
+    }
+  }
 });
 
 // Reset a teacher's password (admin only)

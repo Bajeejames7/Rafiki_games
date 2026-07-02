@@ -10,6 +10,7 @@ const API_BASE = process.env.EXPO_PUBLIC_DOMAIN
 
 export interface Teacher {
   id: number;
+  username: string;
   firstName: string;
   lastName: string;
   block: string;
@@ -51,11 +52,11 @@ export function useAuth() {
     })();
   }, []);
 
-  const login = useCallback(async (teacherId: number, password: string): Promise<string | null> => {
+  const login = useCallback(async (username: string, password: string): Promise<string | null> => {
     const res = await fetch(`${API_BASE}/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ teacherId, password }),
+      body: JSON.stringify({ username, password }),
       signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) {

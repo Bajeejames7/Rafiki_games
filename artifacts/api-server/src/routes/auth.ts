@@ -8,28 +8,28 @@ import { generateToken, storeToken, revokeToken, requireAuth } from "../lib/auth
 const router: IRouter = Router();
 
 const LoginBody = z.object({
-  teacherId: z.number().int().positive(),
+  username: z.string().min(1),
   password: z.string().min(1),
 });
 
 router.post("/auth/login", async (req, res): Promise<void> => {
   const parsed = LoginBody.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: "teacherId (number) and password required" });
+    res.status(400).json({ error: "Username and password required" });
     return;
   }
 
-  const { teacherId, password } = parsed.data;
-  const [teacher] = await db.select().from(teachersTable).where(eq(teachersTable.id, teacherId));
+  const { username, password } = parsed.data;
+  const [teacher] = await db.select().from(teachersTable).where(eq(teachersTable.username, username.toLowerCase().trim()));
 
   if (!teacher) {
-    res.status(401).json({ error: "Invalid ID or password" });
+    res.status(401).json({ error: "Invalid username or password" });
     return;
   }
 
   const valid = await bcrypt.compare(password, teacher.passwordHash);
   if (!valid) {
-    res.status(401).json({ error: "Invalid ID or password" });
+    res.status(401).json({ error: "Invalid username or password" });
     return;
   }
 
@@ -42,6 +42,7 @@ router.post("/auth/login", async (req, res): Promise<void> => {
     token,
     teacher: {
       id: teacher.id,
+      username: teacher.username,
       firstName: teacher.firstName,
       lastName: teacher.lastName,
       block: teacher.block,
@@ -62,6 +63,7 @@ router.get("/auth/me", requireAuth, async (req, res): Promise<void> => {
   const teacher = (req as any).teacher;
   res.json({
     id: teacher.id,
+    username: teacher.username,
     firstName: teacher.firstName,
     lastName: teacher.lastName,
     block: teacher.block,

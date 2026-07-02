@@ -130,6 +130,7 @@ export function AdminPanel({ token, onClose }: Props) {
 function CreateTeacherModal({ visible, token, onClose, onCreated }: {
   visible: boolean; token: string; onClose: () => void; onCreated: () => void;
 }) {
+  const [username, setUsername] = useState("");
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [block, setBlock] = useState<Block>("primary");
@@ -137,15 +138,15 @@ function CreateTeacherModal({ visible, token, onClose, onCreated }: {
   const [role, setRole] = useState<"teacher" | "admin">("teacher");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [createdTeacher, setCreatedTeacher] = useState<{ id: number; name: string } | null>(null);
+  const [createdTeacher, setCreatedTeacher] = useState<{ id: number; username: string; name: string } | null>(null);
 
   const reset = () => {
-    setFirstName(""); setLastName(""); setBlock("primary");
+    setUsername(""); setFirstName(""); setLastName(""); setBlock("primary");
     setPassword(""); setRole("teacher"); setError(null); setCreatedTeacher(null);
   };
 
   const handleCreate = async () => {
-    if (!firstName.trim() || !lastName.trim() || !password.trim()) {
+    if (!username.trim() || !firstName.trim() || !lastName.trim() || !password.trim()) {
       setError("All fields required"); return;
     }
     if (password.length < 4) { setError("Password min 4 chars"); return; }
@@ -153,7 +154,7 @@ function CreateTeacherModal({ visible, token, onClose, onCreated }: {
     const res = await fetch(`${API_BASE}/admin/teachers`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ firstName: firstName.trim(), lastName: lastName.trim(), block, password, role }),
+      body: JSON.stringify({ username: username.trim(), firstName: firstName.trim(), lastName: lastName.trim(), block, password, role }),
     });
     setLoading(false);
     if (!res.ok) {
@@ -161,7 +162,7 @@ function CreateTeacherModal({ visible, token, onClose, onCreated }: {
       setError(e.error); return;
     }
     const t = await res.json();
-    setCreatedTeacher({ id: t.id, name: `${t.firstName} ${t.lastName}` });
+    setCreatedTeacher({ id: t.id, username: t.username, name: `${t.firstName} ${t.lastName}` });
     onCreated();
   };
 
@@ -175,9 +176,10 @@ function CreateTeacherModal({ visible, token, onClose, onCreated }: {
             <Text style={styles.successTitle}>Teacher Created!</Text>
             <Text style={styles.successName}>{createdTeacher.name}</Text>
             <View style={styles.idPill}>
-              <Text style={styles.idPillText}>ID: {createdTeacher.id}</Text>
+              <Text style={styles.idPillLabel}>Username</Text>
+              <Text style={styles.idPillText}>{createdTeacher.username}</Text>
             </View>
-            <Text style={styles.successHint}>Share this ID + password with the teacher so they can log in.</Text>
+            <Text style={styles.successHint}>Share the username + temporary password with the teacher to log in.</Text>
             <TouchableOpacity style={styles.doneBtn} onPress={() => { reset(); onClose(); }}>
               <Text style={styles.doneBtnText}>Done</Text>
             </TouchableOpacity>
@@ -185,20 +187,15 @@ function CreateTeacherModal({ visible, token, onClose, onCreated }: {
         ) : (
           <>
             <Text style={styles.modalTitle}>New Teacher</Text>
+            <TextInput style={styles.modalInput} placeholder="Username (e.g. mrs.johnson)" placeholderTextColor="#555" value={username} onChangeText={setUsername} autoCapitalize="none" autoCorrect={false} />
             <TextInput style={styles.modalInput} placeholder="First name" placeholderTextColor="#555" value={firstName} onChangeText={setFirstName} />
             <TextInput style={styles.modalInput} placeholder="Last name" placeholderTextColor="#555" value={lastName} onChangeText={setLastName} />
 
             <Text style={styles.modalLabel}>Block</Text>
             <View style={styles.blockRow}>
               {BLOCKS.map((b) => (
-                <TouchableOpacity
-                  key={b}
-                  style={[styles.blockBtn, block === b && styles.blockBtnActive]}
-                  onPress={() => setBlock(b)}
-                >
-                  <Text style={[styles.blockBtnText, block === b && styles.blockBtnTextActive]}>
-                    {b.toUpperCase()}
-                  </Text>
+                <TouchableOpacity key={b} style={[styles.blockBtn, block === b && styles.blockBtnActive]} onPress={() => setBlock(b)}>
+                  <Text style={[styles.blockBtnText, block === b && styles.blockBtnTextActive]}>{b.toUpperCase()}</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -206,14 +203,8 @@ function CreateTeacherModal({ visible, token, onClose, onCreated }: {
             <Text style={styles.modalLabel}>Role</Text>
             <View style={styles.blockRow}>
               {(["teacher", "admin"] as const).map((r) => (
-                <TouchableOpacity
-                  key={r}
-                  style={[styles.blockBtn, role === r && styles.blockBtnActive]}
-                  onPress={() => setRole(r)}
-                >
-                  <Text style={[styles.blockBtnText, role === r && styles.blockBtnTextActive]}>
-                    {r.charAt(0).toUpperCase() + r.slice(1)}
-                  </Text>
+                <TouchableOpacity key={r} style={[styles.blockBtn, role === r && styles.blockBtnActive]} onPress={() => setRole(r)}>
+                  <Text style={[styles.blockBtnText, role === r && styles.blockBtnTextActive]}>{r.charAt(0).toUpperCase() + r.slice(1)}</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -308,7 +299,8 @@ const styles = StyleSheet.create({
   successBox: { alignItems: "center", gap: 10, paddingVertical: 8 },
   successTitle: { fontSize: 20, fontFamily: "Inter_700Bold", color: "#f0f0f0" },
   successName: { fontSize: 16, fontFamily: "Inter_600SemiBold", color: "#8B949E" },
-  idPill: { backgroundColor: "#5B8AF522", borderRadius: 10, paddingHorizontal: 16, paddingVertical: 8, borderWidth: 1, borderColor: "#5B8AF5" },
+  idPill: { backgroundColor: "#5B8AF522", borderRadius: 10, paddingHorizontal: 16, paddingVertical: 8, borderWidth: 1, borderColor: "#5B8AF5", alignItems: "center" },
+  idPillLabel: { fontSize: 11, fontFamily: "Inter_600SemiBold", color: "#5B8AF5", letterSpacing: 1, marginBottom: 2 },
   idPillText: { fontSize: 20, fontFamily: "Inter_700Bold", color: "#5B8AF5" },
   successHint: { fontSize: 13, fontFamily: "Inter_400Regular", color: "#8B949E", textAlign: "center" },
   doneBtn: { backgroundColor: "#42C97A22", borderRadius: 12, paddingVertical: 12, paddingHorizontal: 32, borderWidth: 1, borderColor: "#42C97A" },

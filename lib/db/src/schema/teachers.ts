@@ -3,6 +3,7 @@ import { z } from "zod";
 
 export const teachersTable = pgTable("teachers", {
   id: serial("id").primaryKey(),
+  username: text("username").notNull().unique(), // used for login
   firstName: text("first_name").notNull(),
   lastName: text("last_name").notNull(),
   block: text("block").notNull(), // "primary" | "jss" | "sss"
