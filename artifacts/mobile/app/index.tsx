@@ -37,7 +37,7 @@ const API_BASE = process.env.EXPO_PUBLIC_DOMAIN
 
 async function apiFetchScores(): Promise<Scores | null> {
   try {
-    const res = await fetch(`${API_BASE}/scores`, { signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`${API_BASE}/scores`, { signal: AbortSignal.timeout(15000) });
     if (!res.ok) return null;
     return await res.json();
   } catch { return null; }
@@ -52,7 +52,7 @@ async function apiPostEvent(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ teamId, teamName, amount, teacherName, teacherClass }),
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) return null;
     return await res.json();
@@ -61,7 +61,7 @@ async function apiPostEvent(
 
 async function apiFetchLog(): Promise<LogEntry[]> {
   try {
-    const res = await fetch(`${API_BASE}/log`, { signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`${API_BASE}/log`, { signal: AbortSignal.timeout(15000) });
     if (!res.ok) return [];
     const data: any[] = await res.json();
     return data.map((e) => ({
@@ -81,7 +81,7 @@ async function apiResetScores(): Promise<Scores | null> {
     const res = await fetch(`${API_BASE}/scores/reset`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) return null;
     return await res.json();
@@ -1553,13 +1553,16 @@ export default function HomeScreen() {
   };
 
   const handleClearLog = () => {
-    Alert.alert("Clear log?", "All recorded events will be deleted.", [
+    Alert.alert("Reset Everything?", "This will reset all scores and clear the log on ALL devices.", [
       { text: "Cancel", style: "cancel" },
       {
-        text: "Clear",
+        text: "Reset",
         style: "destructive",
-        onPress: () => {
-          setLog([]);
+        onPress: async () => {
+          setSyncing(true);
+          await apiResetScores();
+          await refreshFromServer();
+          setSyncing(false);
         },
       },
     ]);
