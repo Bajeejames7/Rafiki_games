@@ -33,7 +33,7 @@ export function useAuth() {
           // Verify token is still valid
           const res = await fetch(`${API_BASE}/auth/me`, {
             headers: { Authorization: `Bearer ${storedToken}` },
-            signal: AbortSignal.timeout(10000),
+            signal: AbortSignal.timeout(60000),
           });
           if (res.ok) {
             const t = await res.json();
@@ -57,7 +57,7 @@ export function useAuth() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(60000), // 60s — Render free tier can take 50s to wake
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: "Login failed" }));

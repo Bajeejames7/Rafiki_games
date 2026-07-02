@@ -26,6 +26,7 @@ export function LoginScreen({ onLogin }: Props) {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [slowServer, setSlowServer] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleLogin = async () => {
@@ -33,8 +34,15 @@ export function LoginScreen({ onLogin }: Props) {
     if (!password.trim()) { setError("Enter your password"); return; }
     setLoading(true);
     setError(null);
+    setSlowServer(false);
+
+    // Show "waking up server" message after 5 seconds
+    const slowTimer = setTimeout(() => setSlowServer(true), 5000);
+
     const err = await onLogin(username.trim(), password.trim());
+    clearTimeout(slowTimer);
     setLoading(false);
+    setSlowServer(false);
     if (err) setError(err);
   };
 
@@ -104,7 +112,12 @@ export function LoginScreen({ onLogin }: Props) {
             activeOpacity={0.8}
           >
             {loading ? (
-              <ActivityIndicator color="#fff" size="small" />
+              <View style={styles.loadingRow}>
+                <ActivityIndicator color="#fff" size="small" />
+                <Text style={styles.loginBtnText}>
+                  {slowServer ? "Waking up server..." : "Signing in..."}
+                </Text>
+              </View>
             ) : (
               <Text style={styles.loginBtnText}>Sign In</Text>
             )}
@@ -131,7 +144,8 @@ const styles = StyleSheet.create({
   errorBox: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "#2D1B1B", borderRadius: 10, padding: 10 },
   errorText: { fontSize: 13, fontFamily: "Inter_500Medium", color: "#ef4444", flex: 1 },
   loginBtn: { backgroundColor: "#5B8AF5", borderRadius: 14, paddingVertical: 14, alignItems: "center", marginTop: 4 },
-  loginBtnDisabled: { opacity: 0.5 },
+  loginBtnDisabled: { opacity: 0.7 },
   loginBtnText: { fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff", letterSpacing: 0.3 },
+  loadingRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   hint: { marginTop: 24, fontSize: 12, fontFamily: "Inter_400Regular", color: "#8B949E66", textAlign: "center" },
 });
