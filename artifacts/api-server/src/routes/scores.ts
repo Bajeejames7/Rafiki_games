@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { eq, desc, sql } from "drizzle-orm";
 import { db, teamScoresTable, pointEventsTable } from "@workspace/db";
+import { requireAuth } from "../lib/auth";
 import { z } from "zod";
 
 const router: IRouter = Router();
@@ -16,6 +17,7 @@ async function ensureTeamRows() {
   }
 }
 
+// Scores are public (shown on load before login too)
 router.get("/scores", async (req, res): Promise<void> => {
   await ensureTeamRows();
   const rows = await db.select().from(teamScoresTable);
@@ -30,18 +32,20 @@ const AddEventBody = z.object({
   teamId: z.string(),
   teamName: z.string(),
   amount: z.number().int(),
-  teacherName: z.string().default(""),
-  teacherClass: z.string().default(""),
 });
 
-router.post("/scores/event", async (req, res): Promise<void> => {
+// All mutations require auth
+router.post("/scores/event", requireAuth, async (req, res): Promise<void> => {
   const parsed = AddEventBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
     return;
   }
 
-  const { teamId, teamName, amount, teacherName, teacherClass } = parsed.data;
+  const teacher = (req as any).teacher;
+  const { teamId, teamName, amount } = parsed.data;
+  const teacherName = `${teacher.firstName} ${teacher.lastName}`;
+  const teacherClass = teacher.block;
 
   await ensureTeamRows();
 
@@ -54,6 +58,7 @@ router.post("/scores/event", async (req, res): Promise<void> => {
     .where(eq(teamScoresTable.teamId, teamId));
 
   await db.insert(pointEventsTable).values({
+    teacherId: teacher.id,
     teamId,
     teamName,
     amount,
@@ -67,11 +72,16 @@ router.post("/scores/event", async (req, res): Promise<void> => {
     result[row.teamId] = row.points;
   }
 
-  req.log.info({ teamId, amount, teacherName }, "Point event recorded");
+  req.log.info({ teamId, amount, teacherId: teacher.id }, "Point event recorded");
   res.json(result);
 });
 
-router.post("/scores/reset", async (req, res): Promise<void> => {
+router.post("/scores/reset", requireAuth, async (req, res): Promise<void> => {
+  const teacher = (req as any).teacher;
+  if (teacher.role !== "admin") {
+    res.status(403).json({ error: "Only admins can reset all scores" });
+    return;
+  }
   await ensureTeamRows();
   for (const teamId of TEAMS) {
     await db
@@ -79,11 +89,11 @@ router.post("/scores/reset", async (req, res): Promise<void> => {
       .set({ points: 0, updatedAt: new Date() })
       .where(eq(teamScoresTable.teamId, teamId));
   }
-  req.log.info("All scores reset");
+  req.log.info({ adminId: teacher.id }, "All scores reset");
   res.json({ wisdom: 0, justice: 0, fortitude: 0, temperance: 0 });
 });
 
-router.get("/log", async (req, res): Promise<void> => {
+router.get("/log", requireAuth, async (req, res): Promise<void> => {
   const events = await db
     .select()
     .from(pointEventsTable)

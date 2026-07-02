@@ -10,6 +10,7 @@ export const teamScoresTable = pgTable("team_scores", {
 
 export const pointEventsTable = pgTable("point_events", {
   id: serial("id").primaryKey(),
+  teacherId: integer("teacher_id"),           // FK to teachers.id (nullable for legacy rows)
   teacherName: text("teacher_name").notNull().default(""),
   teacherClass: text("teacher_class").notNull().default(""),
   teamId: text("team_id").notNull(),

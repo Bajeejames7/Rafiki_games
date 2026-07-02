@@ -24,6 +24,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 
 import colors from "@/constants/colors";
+import { useAuth } from "@/hooks/useAuth";
+import { LoginScreen } from "@/components/LoginScreen";
+import { ChangePasswordScreen } from "@/components/ChangePasswordScreen";
+import { AdminPanel } from "@/components/AdminPanel";
 
 const schoolLogo = require("@/assets/images/school-logo.png");
 const schoolBg = require("@/assets/images/school-bg.jpg");
@@ -43,14 +47,14 @@ async function apiFetchScores(): Promise<Scores | null> {
 }
 
 async function apiPostEvent(
+  token: string,
   teamId: string, teamName: string, amount: number,
-  teacherName: string, teacherClass: string
 ): Promise<Scores | null> {
   try {
     const res = await fetch(`${API_BASE}/scores/event`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ teamId, teamName, amount, teacherName, teacherClass }),
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ teamId, teamName, amount }),
       signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) return null;
@@ -58,9 +62,12 @@ async function apiPostEvent(
   } catch { return null; }
 }
 
-async function apiFetchLog(): Promise<LogEntry[]> {
+async function apiFetchLog(token: string): Promise<LogEntry[]> {
   try {
-    const res = await fetch(`${API_BASE}/log`, { signal: AbortSignal.timeout(15000) });
+    const res = await fetch(`${API_BASE}/log`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(15000),
+    });
     if (!res.ok) return [];
     const data: any[] = await res.json();
     return data.map((e) => ({
@@ -75,11 +82,11 @@ async function apiFetchLog(): Promise<LogEntry[]> {
   } catch { return []; }
 }
 
-async function apiResetScores(): Promise<Scores | null> {
+async function apiResetScores(token: string): Promise<Scores | null> {
   try {
     const res = await fetch(`${API_BASE}/scores/reset`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) return null;
@@ -1413,21 +1420,17 @@ const dpStyles = StyleSheet.create({
 });
 
 export default function HomeScreen() {
+  const { token, teacher, loading: authLoading, login, logout, changePassword } = useAuth();
+  const [showAdmin, setShowAdmin] = useState(false);
+
   const [scores, setScores] = useState<Scores>({
-    wisdom: 0,
-    justice: 0,
-    fortitude: 0,
-    temperance: 0,
+    wisdom: 0, justice: 0, fortitude: 0, temperance: 0,
   });
-  const [teacherName, setTeacherName] = useState("");
-  const [teacherClass, setTeacherClass] = useState("");
-  const [showSetup, setShowSetup] = useState(false);
   const [log, setLog] = useState<LogEntry[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [showWeekly, setShowWeekly] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [online, setOnline] = useState(true);
-
   const insets = useSafeAreaInsets();
   const colorScheme = useColorScheme();
   const isDark = colorScheme === "dark";
@@ -1438,7 +1441,7 @@ export default function HomeScreen() {
   const refreshFromServer = useCallback(async () => {
     const [serverScores, serverLog] = await Promise.all([
       apiFetchScores(),
-      apiFetchLog(),
+      token ? apiFetchLog(token) : Promise.resolve([]),
     ]);
     if (serverScores) {
       setScores(serverScores);
@@ -1449,40 +1452,39 @@ export default function HomeScreen() {
     if (serverLog.length > 0) {
       setLog(serverLog);
     }
-  }, []);
+  }, [token]);
 
   useEffect(() => {
-    AsyncStorage.getItem(TEACHER_KEY).then((raw) => {
-      if (raw) {
-        try {
-          const t = JSON.parse(raw);
-          setTeacherName(t.name ?? "");
-          setTeacherClass(t.className ?? "");
-        } catch {}
-      }
-    });
     refreshFromServer();
     const interval = setInterval(refreshFromServer, 3000);
     return () => clearInterval(interval);
   }, [refreshFromServer]);
 
-  const handleSaveTeacher = (name: string, className: string) => {
-    setTeacherName(name);
-    setTeacherClass(className);
-    setShowSetup(false);
-    AsyncStorage.setItem(TEACHER_KEY, JSON.stringify({ name, className }));
-  };
+  // Show auth screens before main app
+  if (authLoading) return null;
+  if (!token || !teacher) return <LoginScreen onLogin={login} />;
+  if (teacher.mustChangePassword) {
+    return (
+      <ChangePasswordScreen
+        teacherName={`${teacher.firstName} ${teacher.lastName}`}
+        onSave={changePassword}
+      />
+    );
+  }
+  if (showAdmin && teacher.role === "admin") {
+    return <AdminPanel token={token} onClose={() => setShowAdmin(false)} />;
+  }
 
   const handleAdd = async (teamId: string, amount: number) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const team = TEAMS.find((t) => t.id === teamId);
     setScores((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? 0) + amount }));
     setSyncing(true);
-    const updated = await apiPostEvent(teamId, team?.name ?? teamId, amount, teacherName, teacherClass);
+    const updated = await apiPostEvent(token!, teamId, team?.name ?? teamId, amount);
     setSyncing(false);
     if (updated) {
       setScores(updated);
-      const freshLog = await apiFetchLog();
+      const freshLog = await apiFetchLog(token!);
       if (freshLog.length > 0) setLog(freshLog);
     }
   };
@@ -1494,11 +1496,11 @@ export default function HomeScreen() {
     const team = TEAMS.find((t) => t.id === teamId);
     setScores((prev) => ({ ...prev, [teamId]: Math.max(0, (prev[teamId] ?? 0) - 1) }));
     setSyncing(true);
-    const updated = await apiPostEvent(teamId, team?.name ?? teamId, -1, teacherName, teacherClass);
+    const updated = await apiPostEvent(token!, teamId, team?.name ?? teamId, -1);
     setSyncing(false);
     if (updated) {
       setScores(updated);
-      const freshLog = await apiFetchLog();
+      const freshLog = await apiFetchLog(token!);
       if (freshLog.length > 0) setLog(freshLog);
     }
   };
@@ -1511,7 +1513,7 @@ export default function HomeScreen() {
         style: "destructive",
         onPress: async () => {
           setSyncing(true);
-          await apiResetScores();
+          await apiResetScores(token!);
           await refreshFromServer();
           setSyncing(false);
         },
@@ -1531,7 +1533,7 @@ export default function HomeScreen() {
           onPress: async () => {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
             setScores((prev) => ({ ...prev, [teamId]: 0 }));
-            await apiPostEvent(teamId, teamName, -(scores[teamId] ?? 0), teacherName, teacherClass);
+            await apiPostEvent(token!, teamId, teamName, -(scores[teamId] ?? 0));
             await refreshFromServer();
           },
         },
@@ -1551,7 +1553,7 @@ export default function HomeScreen() {
           onPress: async () => {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
             setScores({ wisdom: 0, justice: 0, fortitude: 0, temperance: 0 });
-            await apiResetScores();
+            await apiResetScores(token!);
             await refreshFromServer();
           },
         },
@@ -1601,6 +1603,15 @@ export default function HomeScreen() {
                 { backgroundColor: syncing ? "#F5C518" : online ? "#42C97A" : "#E8503A" }
               ]} />
             </View>
+            {teacher?.role === "admin" && (
+              <TouchableOpacity
+                onPress={() => setShowAdmin(true)}
+                style={styles.resetAllBtn}
+                activeOpacity={0.7}
+              >
+                <Feather name="settings" size={16} color={mutedColor} />
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
               onPress={() => setShowWeekly(true)}
               style={styles.resetAllBtn}
@@ -1623,26 +1634,25 @@ export default function HomeScreen() {
             >
               <Feather name="refresh-ccw" size={16} color={mutedColor} />
             </TouchableOpacity>
+            <TouchableOpacity
+              onPress={logout}
+              style={styles.resetAllBtn}
+              activeOpacity={0.7}
+            >
+              <Feather name="log-out" size={16} color={mutedColor} />
+            </TouchableOpacity>
           </View>
         </View>
         <Text style={styles.headerTitle}>Rafiki Games</Text>
-        {teacherName ? (
-          <View style={styles.teacherBadge}>
-            <Feather name="user" size={12} color={mutedColor} />
-            <Text style={[styles.teacherBadgeText, { color: mutedColor }]}>
-              {teacherName} · {teacherClass}
-            </Text>
-          </View>
-        ) : (
-          <Text style={[styles.headerSubtitle, { color: mutedColor }]}>
-            {totalPoints} total point{totalPoints !== 1 ? "s" : ""} awarded
+        <View style={styles.teacherBadge}>
+          <Feather name="user" size={12} color={mutedColor} />
+          <Text style={[styles.teacherBadgeText, { color: mutedColor }]}>
+            TR {teacher?.firstName} {teacher?.lastName} · {teacher?.block?.toUpperCase()}
           </Text>
-        )}
-        {teacherName ? (
-          <Text style={[styles.headerSubtitle, { color: mutedColor }]}>
-            {totalPoints} total point{totalPoints !== 1 ? "s" : ""} awarded
-          </Text>
-        ) : null}
+        </View>
+        <Text style={[styles.headerSubtitle, { color: mutedColor }]}>
+          {totalPoints} total point{totalPoints !== 1 ? "s" : ""} awarded
+        </Text>
       </View>
 
       <ScrollView
@@ -1655,12 +1665,6 @@ export default function HomeScreen() {
         <LiveScoresStrip scores={scores} />
 
         <DailyTotalsPanel log={log} />
-
-        <TeacherInputCard
-          name={teacherName}
-          className={teacherClass}
-          onSave={handleSaveTeacher}
-        />
 
         {rankedTeams.map((team, idx) => (
           <TeamCard
