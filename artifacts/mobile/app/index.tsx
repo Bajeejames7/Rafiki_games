@@ -1663,8 +1663,6 @@ export default function HomeScreen() {
       }
     }
   };
-    }
-  };
 
   const handleClearLog = () => {
     Alert.alert("Reset Everything?", "This will reset all scores and clear the log on ALL devices.", [
