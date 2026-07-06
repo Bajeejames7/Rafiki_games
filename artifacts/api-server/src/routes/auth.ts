@@ -3,7 +3,7 @@ import bcrypt from "bcryptjs";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, teachersTable } from "@workspace/db";
-import { generateToken, storeToken, revokeToken, requireAuth } from "../lib/auth";
+import { generateToken, requireAuth } from "../lib/auth";
 
 const router: IRouter = Router();
 
@@ -33,8 +33,7 @@ router.post("/auth/login", async (req, res): Promise<void> => {
     return;
   }
 
-  const token = generateToken();
-  storeToken(token, teacher.id);
+  const token = generateToken(teacher.id);
 
   req.log.info({ teacherId: teacher.id, role: teacher.role }, "Login");
 
@@ -53,9 +52,8 @@ router.post("/auth/login", async (req, res): Promise<void> => {
 });
 
 router.post("/auth/logout", requireAuth, async (req, res): Promise<void> => {
-  const authHeader = req.headers["authorization"]!;
-  const token = authHeader.slice(7);
-  revokeToken(token);
+  // With JWT-style tokens, logout is handled client-side by deleting the token
+  // No server-side revocation needed since tokens are self-contained
   res.json({ ok: true });
 });
 

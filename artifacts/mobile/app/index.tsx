@@ -41,9 +41,15 @@ const API_BASE = process.env.EXPO_PUBLIC_DOMAIN
 async function apiFetchScores(): Promise<Scores | null> {
   try {
     const res = await fetch(`${API_BASE}/scores`, { signal: AbortSignal.timeout(15000) });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.error(`Failed to fetch scores: ${res.status} ${res.statusText}`);
+      return null;
+    }
     return await res.json();
-  } catch { return null; }
+  } catch (err) {
+    console.error('Error fetching scores:', err);
+    return null;
+  }
 }
 
 async function apiPostEvent(
@@ -57,9 +63,22 @@ async function apiPostEvent(
       body: JSON.stringify({ teamId, teamName, amount }),
       signal: AbortSignal.timeout(15000),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.error(`Failed to post event: ${res.status} ${res.statusText}`);
+      if (res.status === 401) {
+        // Token expired or invalid — trigger logout
+        throw new Error("UNAUTHORIZED");
+      }
+      const errText = await res.text().catch(() => '');
+      console.error('Response body:', errText);
+      return null;
+    }
     return await res.json();
-  } catch { return null; }
+  } catch (err: any) {
+    if (err.message === "UNAUTHORIZED") throw err;
+    console.error('Error posting event:', err);
+    return null;
+  }
 }
 
 async function apiFetchLog(token: string): Promise<LogEntry[]> {
@@ -68,7 +87,12 @@ async function apiFetchLog(token: string): Promise<LogEntry[]> {
       headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(15000),
     });
-    if (!res.ok) return [];
+    if (!res.ok) {
+      if (res.status === 401) {
+        throw new Error("UNAUTHORIZED");
+      }
+      return [];
+    }
     const data: any[] = await res.json();
     return data.map((e) => ({
       id: String(e.id),
@@ -79,7 +103,10 @@ async function apiFetchLog(token: string): Promise<LogEntry[]> {
       amount: e.amount,
       timestamp: new Date(e.createdAt).getTime(),
     }));
-  } catch { return []; }
+  } catch (err: any) {
+    if (err.message === "UNAUTHORIZED") throw err;
+    return [];
+  }
 }
 
 async function apiResetScores(token: string): Promise<Scores | null> {
@@ -89,9 +116,17 @@ async function apiResetScores(token: string): Promise<Scores | null> {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(15000),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      if (res.status === 401) {
+        throw new Error("UNAUTHORIZED");
+      }
+      return null;
+    }
     return await res.json();
-  } catch { return null; }
+  } catch (err: any) {
+    if (err.message === "UNAUTHORIZED") throw err;
+    return null;
+  }
 }
 
 interface LogEntry {
@@ -1439,20 +1474,32 @@ export default function HomeScreen() {
   const mutedColor = "#8B949E";
 
   const refreshFromServer = useCallback(async () => {
-    const [serverScores, serverLog] = await Promise.all([
-      apiFetchScores(),
-      token ? apiFetchLog(token) : Promise.resolve([]),
-    ]);
-    if (serverScores) {
-      setScores(serverScores);
-      setOnline(true);
-    } else {
-      setOnline(false);
+    try {
+      console.log('[Sync] Fetching from server...');
+      const [serverScores, serverLog] = await Promise.all([
+        apiFetchScores(),
+        token ? apiFetchLog(token) : Promise.resolve([]),
+      ]);
+      if (serverScores) {
+        console.log('[Sync] Scores received:', serverScores);
+        setScores(serverScores);
+        setOnline(true);
+      } else {
+        console.warn('[Sync] Failed to fetch scores');
+        setOnline(false);
+      }
+      if (serverLog.length > 0) {
+        console.log('[Sync] Log entries received:', serverLog.length);
+        setLog(serverLog);
+      }
+    } catch (err: any) {
+      console.error('[Sync] Error:', err);
+      if (err.message === "UNAUTHORIZED") {
+        // Token expired — force logout
+        logout();
+      }
     }
-    if (serverLog.length > 0) {
-      setLog(serverLog);
-    }
-  }, [token]);
+  }, [token, logout]);
 
   useEffect(() => {
     refreshFromServer();
@@ -1478,14 +1525,46 @@ export default function HomeScreen() {
   const handleAdd = async (teamId: string, amount: number) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const team = TEAMS.find((t) => t.id === teamId);
+    console.log('[Action] Adding points:', { teamId, amount, teamName: team?.name });
+    
+    // Optimistic update
     setScores((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? 0) + amount }));
     setSyncing(true);
-    const updated = await apiPostEvent(token!, teamId, team?.name ?? teamId, amount);
-    setSyncing(false);
-    if (updated) {
-      setScores(updated);
-      const freshLog = await apiFetchLog(token!);
-      if (freshLog.length > 0) setLog(freshLog);
+    
+    try {
+      const updated = await apiPostEvent(token!, teamId, team?.name ?? teamId, amount);
+      setSyncing(false);
+      
+      if (updated) {
+        console.log('[Action] Points added successfully, updated scores:', updated);
+        setScores(updated);
+        const freshLog = await apiFetchLog(token!);
+        if (freshLog.length > 0) setLog(freshLog);
+      } else {
+        console.error('[Action] Failed to add points - no response from server');
+        // Revert optimistic update
+        setScores((prev) => ({ ...prev, [teamId]: Math.max(0, (prev[teamId] ?? 0) - amount) }));
+        Alert.alert(
+          "Sync Failed",
+          "Couldn't save points to server. Check your internet connection.",
+          [{ text: "OK" }]
+        );
+      }
+    } catch (err: any) {
+      setSyncing(false);
+      console.error('[Action] Error adding points:', err);
+      
+      if (err.message === "UNAUTHORIZED") {
+        logout();
+      } else {
+        // Revert optimistic update
+        setScores((prev) => ({ ...prev, [teamId]: Math.max(0, (prev[teamId] ?? 0) - amount) }));
+        Alert.alert(
+          "Connection Error",
+          "Failed to connect to server. Please try again.",
+          [{ text: "OK" }]
+        );
+      }
     }
   };
 
@@ -1494,14 +1573,44 @@ export default function HomeScreen() {
     const current = scores[teamId] ?? 0;
     if (current === 0) return;
     const team = TEAMS.find((t) => t.id === teamId);
+    
+    // Optimistic update
     setScores((prev) => ({ ...prev, [teamId]: Math.max(0, (prev[teamId] ?? 0) - 1) }));
     setSyncing(true);
-    const updated = await apiPostEvent(token!, teamId, team?.name ?? teamId, -1);
-    setSyncing(false);
-    if (updated) {
-      setScores(updated);
-      const freshLog = await apiFetchLog(token!);
-      if (freshLog.length > 0) setLog(freshLog);
+    
+    try {
+      const updated = await apiPostEvent(token!, teamId, team?.name ?? teamId, -1);
+      setSyncing(false);
+      
+      if (updated) {
+        setScores(updated);
+        const freshLog = await apiFetchLog(token!);
+        if (freshLog.length > 0) setLog(freshLog);
+      } else {
+        // Revert optimistic update
+        setScores((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? 0) + 1 }));
+        Alert.alert(
+          "Sync Failed",
+          "Couldn't save to server. Check your connection.",
+          [{ text: "OK" }]
+        );
+      }
+    } catch (err: any) {
+      setSyncing(false);
+      
+      if (err.message === "UNAUTHORIZED") {
+        logout();
+      } else {
+        // Revert optimistic update
+        setScores((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? 0) + 1 }));
+        Alert.alert(
+          "Connection Error",
+          "Failed to connect to server. Try again.",
+          [{ text: "OK" }]
+        );
+      }
+    }
+  };
     }
   };
 

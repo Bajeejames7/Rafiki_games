@@ -2,27 +2,30 @@ import { type Request, type Response, type NextFunction } from "express";
 import { db, teachersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
-// Simple token store: token -> teacherId
-// In production you'd use Redis or JWT; for this app an in-memory map is fine
-// since Render restarts are infrequent and tokens persist per process.
-const tokenStore = new Map<string, number>();
+// JWT-style tokens with embedded teacherId
+// Format: {teacherId}.{randomBytes}.{timestamp}
+// This eliminates the need for server-side storage, tokens survive restarts
 
-export function generateToken(): string {
+export function generateToken(teacherId: number): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+  const randomPart = Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+  const timestamp = Date.now();
+  return `${teacherId}.${randomPart}.${timestamp}`;
 }
 
-export function storeToken(token: string, teacherId: number): void {
-  tokenStore.set(token, teacherId);
-}
-
-export function revokeToken(token: string): void {
-  tokenStore.delete(token);
-}
-
-export function getTeacherIdFromToken(token: string): number | undefined {
-  return tokenStore.get(token);
+export function parseToken(token: string): { teacherId: number; timestamp: number } | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  const teacherId = parseInt(parts[0], 10);
+  const timestamp = parseInt(parts[2], 10);
+  if (isNaN(teacherId) || isNaN(timestamp)) return null;
+  
+  // Tokens expire after 30 days
+  const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+  if (Date.now() - timestamp > THIRTY_DAYS) return null;
+  
+  return { teacherId, timestamp };
 }
 
 // Express middleware — attaches teacher to req if valid token present
@@ -33,12 +36,12 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     return;
   }
   const token = authHeader.slice(7);
-  const teacherId = getTeacherIdFromToken(token);
-  if (!teacherId) {
+  const parsed = parseToken(token);
+  if (!parsed) {
     res.status(401).json({ error: "Invalid or expired token" });
     return;
   }
-  const [teacher] = await db.select().from(teachersTable).where(eq(teachersTable.id, teacherId));
+  const [teacher] = await db.select().from(teachersTable).where(eq(teachersTable.id, parsed.teacherId));
   if (!teacher) {
     res.status(401).json({ error: "Teacher not found" });
     return;

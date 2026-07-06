@@ -40,12 +40,14 @@ export function useAuth() {
             setToken(storedToken);
             setTeacher(t);
           } else {
+            // Token invalid or expired — clear and force re-login
             await AsyncStorage.multiRemove([TOKEN_KEY, TEACHER_KEY]);
           }
-        } catch {
-          // Server unreachable — use cached teacher info for display but mark offline
-          setToken(storedToken);
-          setTeacher(JSON.parse(storedTeacher));
+        } catch (err) {
+          // Server unreachable or timeout — clear token and force fresh login
+          // This prevents infinite loading when token is stale
+          console.warn("Token verification failed:", err);
+          await AsyncStorage.multiRemove([TOKEN_KEY, TEACHER_KEY]);
         }
       }
       setLoading(false);
