@@ -34,13 +34,55 @@ const schoolBg = require("@/assets/images/school-bg.jpg");
 
 const TEACHER_KEY = "@virtue_teacher";
 
-const API_BASE = process.env.EXPO_PUBLIC_DOMAIN
-  ? `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`
+// Hardcoded API base URL for production builds
+// Falls back to localhost for local development
+const API_BASE = __DEV__
+  ? (process.env.EXPO_PUBLIC_DOMAIN
+      ? `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`
+      : "http://localhost:3000/api")
   : "https://rafiki-games.onrender.com/api";
+
+// Retry fetch with exponential backoff
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit = {},
+  retries = 2,
+  timeout = 15000
+): Promise<Response> {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeout);
+      
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+      });
+      
+      clearTimeout(timeoutId);
+      return response;
+    } catch (error: any) {
+      const isLastAttempt = i === retries;
+      const isTimeout = error.name === 'AbortError' || error.message?.includes('timeout');
+      
+      console.log(`[Fetch] Attempt ${i + 1}/${retries + 1} failed:`, error.message);
+      
+      if (isLastAttempt) {
+        throw error;
+      }
+      
+      // Wait before retry: 1s, 2s, 4s...
+      const delay = Math.min(1000 * Math.pow(2, i), 4000);
+      console.log(`[Fetch] Retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  throw new Error('Max retries reached');
+}
 
 async function apiFetchScores(): Promise<Scores | null> {
   try {
-    const res = await fetch(`${API_BASE}/scores`, { signal: AbortSignal.timeout(15000) });
+    const res = await fetchWithRetry(`${API_BASE}/scores`, {}, 2, 20000);
     if (!res.ok) {
       console.error(`Failed to fetch scores: ${res.status} ${res.statusText}`);
       return null;
@@ -57,12 +99,16 @@ async function apiPostEvent(
   teamId: string, teamName: string, amount: number,
 ): Promise<Scores | null> {
   try {
-    const res = await fetch(`${API_BASE}/scores/event`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ teamId, teamName, amount }),
-      signal: AbortSignal.timeout(15000),
-    });
+    const res = await fetchWithRetry(
+      `${API_BASE}/scores/event`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ teamId, teamName, amount }),
+      },
+      2,
+      20000
+    );
     if (!res.ok) {
       console.error(`Failed to post event: ${res.status} ${res.statusText}`);
       if (res.status === 401) {
@@ -83,10 +129,12 @@ async function apiPostEvent(
 
 async function apiFetchLog(token: string): Promise<LogEntry[]> {
   try {
-    const res = await fetch(`${API_BASE}/log`, {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(15000),
-    });
+    const res = await fetchWithRetry(
+      `${API_BASE}/log`,
+      { headers: { Authorization: `Bearer ${token}` } },
+      1,
+      15000
+    );
     if (!res.ok) {
       if (res.status === 401) {
         throw new Error("UNAUTHORIZED");
@@ -111,11 +159,15 @@ async function apiFetchLog(token: string): Promise<LogEntry[]> {
 
 async function apiResetScores(token: string): Promise<Scores | null> {
   try {
-    const res = await fetch(`${API_BASE}/scores/reset`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(15000),
-    });
+    const res = await fetchWithRetry(
+      `${API_BASE}/scores/reset`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      },
+      1,
+      15000
+    );
     if (!res.ok) {
       if (res.status === 401) {
         throw new Error("UNAUTHORIZED");

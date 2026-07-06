@@ -6,8 +6,12 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 
-const API_BASE = process.env.EXPO_PUBLIC_DOMAIN
-  ? `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`
+// Hardcoded API base URL for production builds
+// Falls back to localhost for local development
+const API_BASE = __DEV__
+  ? (process.env.EXPO_PUBLIC_DOMAIN
+      ? `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`
+      : "http://localhost:3000/api")
   : "https://rafiki-games.onrender.com/api";
 
 const BLOCKS = ["primary", "jss", "sss"] as const;

@@ -4,8 +4,12 @@ import { useState, useEffect, useCallback } from "react";
 const TOKEN_KEY = "@rafiki_token";
 const TEACHER_KEY = "@rafiki_teacher";
 
-const API_BASE = process.env.EXPO_PUBLIC_DOMAIN
-  ? `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`
+// Hardcoded API base URL for production builds
+// Falls back to localhost for local development
+const API_BASE = __DEV__
+  ? (process.env.EXPO_PUBLIC_DOMAIN
+      ? `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`
+      : "http://localhost:3000/api")
   : "https://rafiki-games.onrender.com/api";
 
 export interface Teacher {
