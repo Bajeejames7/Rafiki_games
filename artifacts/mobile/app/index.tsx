@@ -127,10 +127,11 @@ async function apiPostEvent(
   }
 }
 
-async function apiFetchLog(token: string): Promise<LogEntry[]> {
+async function apiFetchLog(token: string, limit = 50, offset = 0): Promise<LogEntry[]> {
   try {
+    const url = `${API_BASE}/log?limit=${limit}&offset=${offset}`;
     const res = await fetchWithRetry(
-      `${API_BASE}/log`,
+      url,
       { headers: { Authorization: `Bearer ${token}` } },
       1,
       15000
@@ -488,11 +489,17 @@ function HistoryModal({
   log,
   onClose,
   onClear,
+  onLoadMore,
+  hasMore,
+  loading,
 }: {
   visible: boolean;
   log: LogEntry[];
   onClose: () => void;
   onClear: () => void;
+  onLoadMore: () => void;
+  hasMore: boolean;
+  loading: boolean;
 }) {
   const insets = useSafeAreaInsets();
 
@@ -504,7 +511,7 @@ function HistoryModal({
           <View style={histStyles.sheetHeader}>
             <View>
               <Text style={histStyles.sheetTitle}>Points Log</Text>
-              <Text style={histStyles.sheetSub}>{log.length} event{log.length !== 1 ? "s" : ""} recorded</Text>
+              <Text style={histStyles.sheetSub}>{log.length} event{log.length !== 1 ? "s" : ""} loaded</Text>
             </View>
             <View style={histStyles.headerBtns}>
               {log.length > 0 && (
@@ -547,6 +554,24 @@ function HistoryModal({
                   </View>
                 );
               })}
+              
+              {hasMore && (
+                <TouchableOpacity 
+                  onPress={onLoadMore} 
+                  style={histStyles.loadMoreBtn}
+                  disabled={loading}
+                  activeOpacity={0.7}
+                >
+                  {loading ? (
+                    <ActivityIndicator size="small" color="#5B8AF5" />
+                  ) : (
+                    <>
+                      <Feather name="chevron-down" size={16} color="#5B8AF5" />
+                      <Text style={histStyles.loadMoreText}>Load More</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              )}
             </ScrollView>
           )}
         </View>
@@ -672,6 +697,22 @@ const histStyles = StyleSheet.create({
     fontSize: 13,
     fontFamily: "Inter_400Regular",
     color: "#8B949E66",
+  },
+  loadMoreBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    backgroundColor: "#21262D",
+    borderRadius: 10,
+    paddingVertical: 12,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  loadMoreText: {
+    fontSize: 13,
+    fontFamily: "Inter_600SemiBold",
+    color: "#5B8AF5",
   },
 });
 
@@ -1514,6 +1555,9 @@ export default function HomeScreen() {
     wisdom: 0, justice: 0, fortitude: 0, temperance: 0,
   });
   const [log, setLog] = useState<LogEntry[]>([]);
+  const [logOffset, setLogOffset] = useState(0);
+  const [hasMoreLog, setHasMoreLog] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showWeekly, setShowWeekly] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -1530,7 +1574,7 @@ export default function HomeScreen() {
       console.log('[Sync] Fetching from server...');
       const [serverData, serverLog] = await Promise.all([
         apiFetchScores(),
-        token ? apiFetchLog(token) : Promise.resolve([]),
+        token ? apiFetchLog(token, 50, 0) : Promise.resolve([]),
       ]);
       if (serverData) {
         console.log('[Sync] Scores received:', serverData);
@@ -1544,6 +1588,8 @@ export default function HomeScreen() {
       if (serverLog.length > 0) {
         console.log('[Sync] Log entries received:', serverLog.length);
         setLog(serverLog);
+        setLogOffset(serverLog.length);
+        setHasMoreLog(serverLog.length >= 50);
       }
     } catch (err: any) {
       console.error('[Sync] Error:', err);
@@ -1553,6 +1599,29 @@ export default function HomeScreen() {
       }
     }
   }, [token, logout]);
+
+  const loadMoreLog = useCallback(async () => {
+    if (!token || loadingMore || !hasMoreLog) return;
+    
+    setLoadingMore(true);
+    try {
+      const moreLog = await apiFetchLog(token, 50, logOffset);
+      if (moreLog.length > 0) {
+        setLog((prev) => [...prev, ...moreLog]);
+        setLogOffset((prev) => prev + moreLog.length);
+        setHasMoreLog(moreLog.length >= 50);
+      } else {
+        setHasMoreLog(false);
+      }
+    } catch (err: any) {
+      console.error('[LoadMore] Error:', err);
+      if (err.message === "UNAUTHORIZED") {
+        logout();
+      }
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [token, loadingMore, hasMoreLog, logOffset, logout]);
 
   useEffect(() => {
     refreshFromServer();
@@ -1593,8 +1662,12 @@ export default function HomeScreen() {
         console.log('[Action] Points added successfully, updated scores:', updated);
         setScores(updated.liveStandings);
         setTodayPoints(updated.todayPoints);
-        const freshLog = await apiFetchLog(token!);
-        if (freshLog.length > 0) setLog(freshLog);
+        const freshLog = await apiFetchLog(token!, 50, 0);
+        if (freshLog.length > 0) {
+          setLog(freshLog);
+          setLogOffset(freshLog.length);
+          setHasMoreLog(freshLog.length >= 50);
+        }
       } else {
         console.error('[Action] Failed to add points - no response from server');
         // Revert optimistic update
@@ -1643,8 +1716,12 @@ export default function HomeScreen() {
       if (updated) {
         setScores(updated.liveStandings);
         setTodayPoints(updated.todayPoints);
-        const freshLog = await apiFetchLog(token!);
-        if (freshLog.length > 0) setLog(freshLog);
+        const freshLog = await apiFetchLog(token!, 50, 0);
+        if (freshLog.length > 0) {
+          setLog(freshLog);
+          setLogOffset(freshLog.length);
+          setHasMoreLog(freshLog.length >= 50);
+        }
       } else {
         // Revert optimistic update
         setScores((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? 0) + 1 }));
@@ -1759,6 +1836,9 @@ export default function HomeScreen() {
         log={log}
         onClose={() => setShowHistory(false)}
         onClear={handleClearLog}
+        onLoadMore={loadMoreLog}
+        hasMore={hasMoreLog}
+        loading={loadingMore}
       />
 
       <WeeklyModal

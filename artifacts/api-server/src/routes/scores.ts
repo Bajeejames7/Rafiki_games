@@ -195,11 +195,35 @@ router.post("/scores/reset-daily", async (req, res): Promise<void> => {
 });
 
 router.get("/log", requireAuth, async (req, res): Promise<void> => {
-  const events = await db
+  const teacher = (req as any).teacher;
+  const isAdmin = teacher.role === "admin";
+  
+  // Parse query parameters
+  const limit = parseInt(req.query.limit as string) || 50;
+  const offset = parseInt(req.query.offset as string) || 0;
+  
+  let query = db
     .select()
     .from(pointEventsTable)
     .orderBy(desc(pointEventsTable.createdAt))
-    .limit(500);
+    .limit(limit)
+    .offset(offset);
+  
+  // Non-admins only see last 3 days
+  if (!isAdmin) {
+    const threeDaysAgo = new Date();
+    threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+    
+    query = db
+      .select()
+      .from(pointEventsTable)
+      .where(sql`${pointEventsTable.createdAt} >= ${threeDaysAgo.toISOString()}`)
+      .orderBy(desc(pointEventsTable.createdAt))
+      .limit(limit)
+      .offset(offset);
+  }
+  
+  const events = await query;
   res.json(events);
 });
 
