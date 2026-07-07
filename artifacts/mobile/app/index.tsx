@@ -80,7 +80,7 @@ async function fetchWithRetry(
   throw new Error('Max retries reached');
 }
 
-async function apiFetchScores(): Promise<Scores | null> {
+async function apiFetchScores(): Promise<{ liveStandings: Scores; todayPoints: Scores } | null> {
   try {
     const res = await fetchWithRetry(`${API_BASE}/scores`, {}, 2, 20000);
     if (!res.ok) {
@@ -97,7 +97,7 @@ async function apiFetchScores(): Promise<Scores | null> {
 async function apiPostEvent(
   token: string,
   teamId: string, teamName: string, amount: number,
-): Promise<Scores | null> {
+): Promise<{ liveStandings: Scores; todayPoints: Scores } | null> {
   try {
     const res = await fetchWithRetry(
       `${API_BASE}/scores/event`,
@@ -157,7 +157,7 @@ async function apiFetchLog(token: string): Promise<LogEntry[]> {
   }
 }
 
-async function apiResetScores(token: string): Promise<Scores | null> {
+async function apiResetScores(token: string): Promise<{ liveStandings: Scores; todayPoints: Scores } | null> {
   try {
     const res = await fetchWithRetry(
       `${API_BASE}/scores/reset`,
@@ -1414,16 +1414,13 @@ const lsStyles = StyleSheet.create({
   },
 });
 
-function DailyTotalsPanel({ log }: { log: LogEntry[] }) {
-  const todayKey = getDayKey(Date.now());
-  const todayEntries = log.filter((e) => getDayKey(e.timestamp) === todayKey && e.amount > 0);
-  const todayTotals = calcTotals(todayEntries);
-  const todayGrand = Object.values(todayTotals).reduce((a, b) => a + b, 0);
+function DailyTotalsPanel({ todayPoints }: { todayPoints: Scores }) {
+  const todayGrand = Object.values(todayPoints).reduce((a, b) => a + b, 0);
 
   if (todayGrand === 0) return null;
 
-  const sorted = [...TEAMS].sort((a, b) => (todayTotals[b.id] ?? 0) - (todayTotals[a.id] ?? 0));
-  const maxPts = todayTotals[sorted[0].id] ?? 1;
+  const sorted = [...TEAMS].sort((a, b) => (todayPoints[b.id] ?? 0) - (todayPoints[a.id] ?? 0));
+  const maxPts = todayPoints[sorted[0].id] ?? 1;
 
   return (
     <View style={dpStyles.panel}>
@@ -1431,9 +1428,9 @@ function DailyTotalsPanel({ log }: { log: LogEntry[] }) {
         <Text style={dpStyles.panelTitle}>Today's Points</Text>
         <Text style={dpStyles.panelTotal}>{todayGrand} total</Text>
       </View>
-      {sorted.filter((t) => (todayTotals[t.id] ?? 0) > 0).map((team) => {
+      {sorted.filter((t) => (todayPoints[t.id] ?? 0) > 0).map((team) => {
         const tc = colors.teams[team.id];
-        const pts = todayTotals[team.id] ?? 0;
+        const pts = todayPoints[team.id] ?? 0;
         const barPct = Math.max((pts / maxPts) * 100, 6);
         return (
           <View key={team.id} style={dpStyles.row}>
@@ -1513,6 +1510,9 @@ export default function HomeScreen() {
   const [scores, setScores] = useState<Scores>({
     wisdom: 0, justice: 0, fortitude: 0, temperance: 0,
   });
+  const [todayPoints, setTodayPoints] = useState<Scores>({
+    wisdom: 0, justice: 0, fortitude: 0, temperance: 0,
+  });
   const [log, setLog] = useState<LogEntry[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [showWeekly, setShowWeekly] = useState(false);
@@ -1528,13 +1528,14 @@ export default function HomeScreen() {
   const refreshFromServer = useCallback(async () => {
     try {
       console.log('[Sync] Fetching from server...');
-      const [serverScores, serverLog] = await Promise.all([
+      const [serverData, serverLog] = await Promise.all([
         apiFetchScores(),
         token ? apiFetchLog(token) : Promise.resolve([]),
       ]);
-      if (serverScores) {
-        console.log('[Sync] Scores received:', serverScores);
-        setScores(serverScores);
+      if (serverData) {
+        console.log('[Sync] Scores received:', serverData);
+        setScores(serverData.liveStandings);
+        setTodayPoints(serverData.todayPoints);
         setOnline(true);
       } else {
         console.warn('[Sync] Failed to fetch scores');
@@ -1581,6 +1582,7 @@ export default function HomeScreen() {
     
     // Optimistic update
     setScores((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? 0) + amount }));
+    setTodayPoints((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? 0) + amount }));
     setSyncing(true);
     
     try {
@@ -1589,13 +1591,15 @@ export default function HomeScreen() {
       
       if (updated) {
         console.log('[Action] Points added successfully, updated scores:', updated);
-        setScores(updated);
+        setScores(updated.liveStandings);
+        setTodayPoints(updated.todayPoints);
         const freshLog = await apiFetchLog(token!);
         if (freshLog.length > 0) setLog(freshLog);
       } else {
         console.error('[Action] Failed to add points - no response from server');
         // Revert optimistic update
         setScores((prev) => ({ ...prev, [teamId]: Math.max(0, (prev[teamId] ?? 0) - amount) }));
+        setTodayPoints((prev) => ({ ...prev, [teamId]: Math.max(0, (prev[teamId] ?? 0) - amount) }));
         Alert.alert(
           "Sync Failed",
           "Couldn't save points to server. Check your internet connection.",
@@ -1611,6 +1615,7 @@ export default function HomeScreen() {
       } else {
         // Revert optimistic update
         setScores((prev) => ({ ...prev, [teamId]: Math.max(0, (prev[teamId] ?? 0) - amount) }));
+        setTodayPoints((prev) => ({ ...prev, [teamId]: Math.max(0, (prev[teamId] ?? 0) - amount) }));
         Alert.alert(
           "Connection Error",
           "Failed to connect to server. Please try again.",
@@ -1628,6 +1633,7 @@ export default function HomeScreen() {
     
     // Optimistic update
     setScores((prev) => ({ ...prev, [teamId]: Math.max(0, (prev[teamId] ?? 0) - 1) }));
+    setTodayPoints((prev) => ({ ...prev, [teamId]: Math.max(0, (prev[teamId] ?? 0) - 1) }));
     setSyncing(true);
     
     try {
@@ -1635,12 +1641,14 @@ export default function HomeScreen() {
       setSyncing(false);
       
       if (updated) {
-        setScores(updated);
+        setScores(updated.liveStandings);
+        setTodayPoints(updated.todayPoints);
         const freshLog = await apiFetchLog(token!);
         if (freshLog.length > 0) setLog(freshLog);
       } else {
         // Revert optimistic update
         setScores((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? 0) + 1 }));
+        setTodayPoints((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? 0) + 1 }));
         Alert.alert(
           "Sync Failed",
           "Couldn't save to server. Check your connection.",
@@ -1701,18 +1709,28 @@ export default function HomeScreen() {
   };
 
   const handleResetAll = () => {
+    if (teacher?.role !== "admin") {
+      Alert.alert("Admin Only", "Only administrators can reset live standings.");
+      return;
+    }
+    
     Alert.alert(
-      "Reset All Teams?",
-      "This will reset ALL teams to zero on ALL devices.",
+      "Reset Live Standings?",
+      "This will reset the LIVE STANDINGS to zero. Today's Points will not be affected.",
       [
         { text: "Cancel", style: "cancel" },
         {
-          text: "Reset All",
+          text: "Reset Live Standings",
           style: "destructive",
           onPress: async () => {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-            setScores({ wisdom: 0, justice: 0, fortitude: 0, temperance: 0 });
-            await apiResetScores(token!);
+            setSyncing(true);
+            const result = await apiResetScores(token!);
+            setSyncing(false);
+            if (result) {
+              setScores(result.liveStandings);
+              setTodayPoints(result.todayPoints);
+            }
             await refreshFromServer();
           },
         },
@@ -1722,6 +1740,7 @@ export default function HomeScreen() {
 
   const rankedTeams = getRankedTeams(scores);
   const totalPoints = Object.values(scores).reduce((a, b) => a + b, 0);
+  const todayTotal = Object.values(todayPoints).reduce((a, b) => a + b, 0);
   const leader = rankedTeams[0];
   const leaderScore = scores[leader.id] ?? 0;
   const isTie = leaderScore > 0 && (scores[rankedTeams[1].id] ?? 0) === leaderScore;
@@ -1823,7 +1842,7 @@ export default function HomeScreen() {
       >
         <LiveScoresStrip scores={scores} />
 
-        <DailyTotalsPanel log={log} />
+        <DailyTotalsPanel todayPoints={todayPoints} />
 
         {rankedTeams.map((team, idx) => (
           <TeamCard
