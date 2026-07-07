@@ -119,27 +119,51 @@ export function useAuth() {
   }, [token]);
 
   const changePassword = useCallback(async (newPassword: string): Promise<string | null> => {
-    const res = await fetch(`${API_BASE}/auth/change-password`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ newPassword }),
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: "Failed" }));
-      return err.error ?? "Failed";
+    try {
+      console.log('[ChangePassword] Starting password change...');
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        console.log('[ChangePassword] Timeout after 15s');
+        controller.abort();
+      }, 15000);
+
+      const res = await fetch(`${API_BASE}/auth/change-password`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ newPassword }),
+        signal: controller.signal,
+      });
+      
+      clearTimeout(timeoutId);
+      console.log('[ChangePassword] Response received:', res.status);
+      
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "Failed to change password" }));
+        console.error('[ChangePassword] Error:', err);
+        return err.error ?? "Failed to change password";
+      }
+      
+      // Update local teacher state
+      console.log('[ChangePassword] Success! Updating local state...');
+      setTeacher((prev) => prev ? { ...prev, mustChangePassword: false } : prev);
+      const stored = await AsyncStorage.getItem(TEACHER_KEY);
+      if (stored) {
+        const t = JSON.parse(stored);
+        await AsyncStorage.setItem(TEACHER_KEY, JSON.stringify({ ...t, mustChangePassword: false }));
+      }
+      console.log('[ChangePassword] Password changed successfully');
+      return null;
+    } catch (err: any) {
+      console.error('[ChangePassword] Error:', err.name, err.message);
+      if (err.name === "AbortError") {
+        return "Request timed out. Please try again.";
+      }
+      return `Failed: ${err.message || 'Unknown error'}`;
     }
-    // Update local teacher state
-    setTeacher((prev) => prev ? { ...prev, mustChangePassword: false } : prev);
-    const stored = await AsyncStorage.getItem(TEACHER_KEY);
-    if (stored) {
-      const t = JSON.parse(stored);
-      await AsyncStorage.setItem(TEACHER_KEY, JSON.stringify({ ...t, mustChangePassword: false }));
-    }
-    return null;
   }, [token]);
 
   return { token, teacher, loading, login, logout, changePassword };
