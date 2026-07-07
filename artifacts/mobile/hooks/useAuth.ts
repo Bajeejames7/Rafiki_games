@@ -12,6 +12,9 @@ const API_BASE = __DEV__
       : "http://localhost:3000/api")
   : "https://rafiki-games.onrender.com/api";
 
+console.log('[useAuth] API_BASE configured as:', API_BASE);
+console.log('[useAuth] __DEV__ is:', __DEV__);
+
 export interface Teacher {
   id: number;
   username: string;
@@ -55,34 +58,51 @@ export function useAuth() {
 
   const login = useCallback(async (username: string, password: string): Promise<string | null> => {
     try {
-      console.log('[Login] Starting login request...');
+      console.log('[Login] Starting login request to:', API_BASE);
+      console.log('[Login] Username:', username);
+      
+      // Create timeout using AbortController (React Native compatible)
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        console.log('[Login] Timeout after 70s');
+        controller.abort();
+      }, 70000); // 70s — Render free tier can take 50s+ to wake
+
       const res = await fetch(`${API_BASE}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
-        signal: AbortSignal.timeout(70000), // 70s — Render free tier can take 50s+ to wake
+        signal: controller.signal,
       });
+      
+      clearTimeout(timeoutId);
       console.log('[Login] Response received:', res.status);
+      
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: "Login failed" }));
+        console.error('[Login] Error response:', err);
         return err.error ?? "Login failed";
       }
-      const { token: t, teacher: tch } = await res.json();
+      
+      const data = await res.json();
+      console.log('[Login] Data received:', { hasToken: !!data.token, hasTeacher: !!data.teacher });
+      
+      const { token: t, teacher: tch } = data;
       setToken(t);
       setTeacher(tch);
       await AsyncStorage.setItem(TOKEN_KEY, t);
       await AsyncStorage.setItem(TEACHER_KEY, JSON.stringify(tch));
-      console.log('[Login] Success!');
+      console.log('[Login] Success! Saved to storage');
       return null; // null = success
     } catch (err: any) {
-      console.error("Login error:", err);
-      if (err.name === "TimeoutError" || err.message?.includes("timeout")) {
-        return "Server took too long to respond. Try again.";
+      console.error("Login error:", err.name, err.message);
+      if (err.name === "AbortError") {
+        return "Server is taking too long. Try again in a minute.";
       }
-      if (err.message?.includes("Network") || err.message?.includes("fetch")) {
-        return "Network error. Check your connection.";
+      if (err.message?.includes("Network request failed")) {
+        return "Network error. Check your internet connection.";
       }
-      return "Unable to connect. Check your internet.";
+      return `Connection failed: ${err.message || 'Unknown error'}`;
     }
   }, []);
 
