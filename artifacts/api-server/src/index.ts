@@ -1,6 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { runMigrations } from "./lib/migrate";
+import { pool } from "@workspace/db";
 
 const rawPort = process.env["PORT"];
 
@@ -40,6 +41,16 @@ runMigrations()
             logger.info({ status: res.status }, "Self-ping OK");
           } catch (err) {
             logger.warn({ err }, "Self-ping failed");
+          }
+
+          // Also ping the database to prevent Aiven free tier from powering off.
+          try {
+            const client = await pool.connect();
+            await client.query("SELECT 1");
+            client.release();
+            logger.info("DB keep-alive ping OK");
+          } catch (err) {
+            logger.warn({ err }, "DB keep-alive ping failed");
           }
         }, TEN_MINUTES);
 

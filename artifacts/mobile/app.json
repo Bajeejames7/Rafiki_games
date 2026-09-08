@@ -49,13 +49,13 @@
       "reactCompiler": true
     },
     "extra": {
-      "eas": {
-        "projectId": "76a68926-3380-4075-b517-c8f4dec0ccc5"
-      },
       "router": {
         "origin": "https://replit.com/"
+      },
+      "eas": {
+        "projectId": "c83ce2d0-77e8-4a69-ab62-efc05f979240"
       }
     },
-    "owner": "bajeejamess-team"
+    "owner": "bajee"
   }
 }
