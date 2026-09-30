@@ -51149,8 +51149,13 @@ var Logo = external_exports.string().max(3e5, "That logo is too large; use a sma
   (v) => v === "" || /^logos\/[a-z0-9_-]+\.(png|jpg|jpeg|webp|svg)$/.test(v) || /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(v),
   "Upload a PNG, JPG or WebP image"
 );
+var Background = external_exports.string().max(9e5, "That photo is too large; use a smaller image").refine(
+  (v) => v === "" || /^backgrounds\/[a-z0-9_-]+\.(jpg|jpeg|png|webp)$/.test(v) || /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(v),
+  "Upload a JPG, PNG or WebP photo"
+);
 var Settings = external_exports.object({
   logo: Logo,
+  background: Background,
   name: text(60),
   shortCode: text(4).transform((s) => s.toUpperCase()),
   color: external_exports.string().regex(/^#[0-9a-fA-F]{6}$/),
@@ -51193,7 +51198,8 @@ function present(p) {
     teams: p.teams,
     categories: p.categories,
     archived: p.archived,
-    logo: p.logo
+    logo: p.logo,
+    background: p.background
   };
 }
 programRoutes.get("/programs", async (req, res) => {
@@ -51268,6 +51274,7 @@ programRoutes.patch("/programs/:slug", async (req, res) => {
   }
   const columns = {
     logo: body.logo,
+    background: body.background,
     name: body.name,
     short_code: body.shortCode,
     color: body.color,
@@ -51638,7 +51645,7 @@ userRoutes.delete("/users/:id", async (req, res) => {
 function createApp(webDir) {
   const app = (0, import_express6.default)();
   app.set("trust proxy", 1);
-  app.use(import_express6.default.json({ limit: "200kb" }));
+  app.use(import_express6.default.json({ limit: "1mb" }));
   const api = import_express6.default.Router();
   api.get("/health", (_req, res) => {
     res.json({ ok: true });
@@ -51891,6 +51898,18 @@ var migrations = [
         'Felix Mwendwa manages school-based football engagement at the Daniels School.' || E'\\n\\n' ||
         'Activities: coaching sessions, skill development drills, and character mentoring integrated with sports.'
        WHERE slug = 'daniels' AND notes = 'Requirements to be added after the survey.';
+    `
+  },
+  {
+    // Each school's own photo behind its home page: a file shipped with the
+    // app ("backgrounds/x.jpg") or one uploaded from Setup (a data: URL).
+    id: "006_program_backgrounds",
+    sql: `
+      ALTER TABLE programs ADD COLUMN background text NOT NULL DEFAULT '';
+      UPDATE programs SET background = 'backgrounds/rafiki.jpg'    WHERE slug = 'rafiki';
+      UPDATE programs SET background = 'backgrounds/daniels.jpg'   WHERE slug = 'daniels';
+      UPDATE programs SET background = 'backgrounds/icc-imara.jpg' WHERE slug = 'icc-imara';
+      UPDATE programs SET background = 'backgrounds/rosslyn.jpg'   WHERE slug = 'rosslyn';
     `
   }
 ];

@@ -106,9 +106,9 @@ const AddEventBody = z.object({
   clientEventId: z.string().min(8).max(64).optional(),
 });
 
-// Teachers award small amounts from the buttons (−1, +1, +5, +10). Anything
-// larger is an admin correction.
-const TEACHER_MAX_AMOUNT = 10;
+// Teachers award points from the buttons (−50, +50, +100, +200). Anything
+// larger is an admin correction. (Older app builds still send ±1/5/10.)
+const TEACHER_MAX_AMOUNT = 200;
 
 // All mutations require auth
 router.post("/scores/event", requireAuth, async (req, res): Promise<void> => {

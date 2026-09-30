@@ -1184,11 +1184,11 @@ function TeamCard({
         </View>
 
         <View style={styles.cardActions}>
-          <ScoreButton label="−1" onPress={onSubtract} color={colors.light.destructive} small />
+          <ScoreButton label="−50" onPress={onSubtract} color={colors.light.destructive} small />
           <View style={styles.addButtons}>
-            <ScoreButton label="+1" onPress={() => handleAdd(1)} color={tc.primary} small />
-            <ScoreButton label="+5" onPress={() => handleAdd(5)} color={tc.primary} small />
-            <ScoreButton label="+10" onPress={() => handleAdd(10)} color={tc.primary} />
+            <ScoreButton label="+50" onPress={() => handleAdd(50)} color={tc.primary} small />
+            <ScoreButton label="+100" onPress={() => handleAdd(100)} color={tc.primary} small />
+            <ScoreButton label="+200" onPress={() => handleAdd(200)} color={tc.primary} small />
           </View>
         </View>
       </Animated.View>
@@ -1703,11 +1703,15 @@ export default function HomeScreen() {
     if (fresh.length > 0) setLog((prev) => mergeNewestPage(fresh, prev));
   };
 
-  // +1/+5/+10 and −1 all go through here.
-  const award = async (teamId: string, amount: number) => {
+  // +50/+100/+200 and −50 all go through here.
+  const award = async (teamId: string, requested: number) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const team = TEAMS.find((t) => t.id === teamId);
-    if (amount < 0 && (scores[teamId] ?? 0) === 0) return;
+    const current = scores[teamId] ?? 0;
+    if (requested < 0 && current === 0) return;
+    // −50 on a house with fewer than 50 points takes it to 0, and the log
+    // records what was actually taken off.
+    const amount = requested < 0 ? -Math.min(-requested, current) : requested;
 
     const bump = (delta: number) => (prev: Scores) => ({ ...prev, [teamId]: Math.max(0, (prev[teamId] ?? 0) + delta) });
     // Optimistic update; the server's numbers replace it as soon as they arrive.
@@ -1929,7 +1933,7 @@ export default function HomeScreen() {
             score={scores[team.id] ?? 0}
             rank={idx}
             onAdd={(amount) => award(team.id, amount)}
-            onSubtract={() => award(team.id, -1)}
+            onSubtract={() => award(team.id, -50)}
             onReset={isAdmin ? () => handleResetTeam(team.id, team.name) : undefined}
           />
         ))}
