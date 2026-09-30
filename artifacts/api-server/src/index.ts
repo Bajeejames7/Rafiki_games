@@ -2,6 +2,7 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { runMigrations } from "./lib/migrate";
 import { pool } from "@workspace/db";
+import { mountInterschool } from "./lib/interschool";
 
 const rawPort = process.env["PORT"];
 
@@ -19,6 +20,7 @@ if (Number.isNaN(port) || port <= 0) {
 
 // Run migrations before starting server
 runMigrations()
+  .then(() => mountInterschool(app))
   .then(() => {
     app.listen(port, (err) => {
       if (err) {
