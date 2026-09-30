@@ -1,16 +1,10 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useState, useEffect, useCallback } from "react";
+import { API_BASE } from "@/constants/api";
 
 const TOKEN_KEY = "@rafiki_token";
 const TEACHER_KEY = "@rafiki_teacher";
 
-// Hardcoded API base URL for production builds
-// Falls back to localhost for local development
-const API_BASE = __DEV__
-  ? (process.env.EXPO_PUBLIC_DOMAIN
-      ? `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`
-      : "http://localhost:3000/api")
-  : "https://rafiki-games.onrender.com/api";
 
 console.log('[useAuth] API_BASE configured as:', API_BASE);
 console.log('[useAuth] __DEV__ is:', __DEV__);
@@ -37,11 +31,26 @@ export function useAuth() {
         const storedToken = await AsyncStorage.getItem(TOKEN_KEY);
         const storedTeacher = await AsyncStorage.getItem(TEACHER_KEY);
         if (storedToken && storedTeacher) {
-          // Trust stored session - don't verify on startup
-          // This prevents waking the server twice (once on startup, once on login)
+          // Show the stored session at once (the server may be asleep and take
+          // 50s to wake), then check it in the background: this picks up a
+          // role an admin changed, and signs out an account that was deleted
+          // or a token the server no longer accepts.
           try {
             setToken(storedToken);
             setTeacher(JSON.parse(storedTeacher));
+            fetch(`${API_BASE}/auth/me`, { headers: { Authorization: `Bearer ${storedToken}` } })
+              .then(async (res) => {
+                if (res.status === 401) {
+                  setToken(null);
+                  setTeacher(null);
+                  await AsyncStorage.multiRemove([TOKEN_KEY, TEACHER_KEY]);
+                } else if (res.ok) {
+                  const fresh: Teacher = await res.json();
+                  setTeacher(fresh);
+                  await AsyncStorage.setItem(TEACHER_KEY, JSON.stringify(fresh));
+                }
+              })
+              .catch(() => {}); // offline: keep the stored session
           } catch (err) {
             // Invalid stored data - clear it
             console.warn("Invalid stored session:", err);

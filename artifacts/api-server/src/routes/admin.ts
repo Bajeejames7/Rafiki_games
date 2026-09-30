@@ -3,15 +3,21 @@ import bcrypt from "bcryptjs";
 import { eq, desc } from "drizzle-orm";
 import { z } from "zod";
 import { db, teachersTable, pointEventsTable, BLOCKS } from "@workspace/db";
-import { requireAdmin } from "../lib/auth";
+import { currentTeacher, requireAdmin } from "../lib/auth";
 
 const router: IRouter = Router();
+
+function idParam(raw: string | string[] | undefined): number | null {
+  const id = parseInt(String(raw), 10);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
 
 // List all teachers
 router.get("/admin/teachers", requireAdmin, async (req, res): Promise<void> => {
   const teachers = await db
     .select({
       id: teachersTable.id,
+      username: teachersTable.username,
       firstName: teachersTable.firstName,
       lastName: teachersTable.lastName,
       block: teachersTable.block,
@@ -25,9 +31,9 @@ router.get("/admin/teachers", requireAdmin, async (req, res): Promise<void> => {
 });
 
 const CreateTeacherBody = z.object({
-  username: z.string().min(2).regex(/^[a-zA-Z0-9._-]+$/, "Username: letters, numbers, . _ - only"),
-  firstName: z.string().min(1),
-  lastName: z.string().min(1),
+  username: z.string().trim().min(2).regex(/^[a-zA-Z0-9._-]+$/, "Username: letters, numbers, . _ - only"),
+  firstName: z.string().trim().min(1),
+  lastName: z.string().trim().min(1),
   block: z.enum(BLOCKS),
   password: z.string().min(4),
   role: z.enum(["admin", "teacher"]).default("teacher"),
@@ -37,7 +43,7 @@ const CreateTeacherBody = z.object({
 router.post("/admin/teachers", requireAdmin, async (req, res): Promise<void> => {
   const parsed = CreateTeacherBody.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid details" });
     return;
   }
   const { username, firstName, lastName, block, password, role } = parsed.data;
@@ -75,28 +81,46 @@ router.post("/admin/teachers", requireAdmin, async (req, res): Promise<void> => 
 
 // Reset a teacher's password (admin only)
 router.put("/admin/teachers/:id/reset-password", requireAdmin, async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
-  const { newPassword } = req.body;
-  if (!newPassword || newPassword.length < 4) {
+  const id = idParam(req.params.id);
+  const { newPassword } = req.body ?? {};
+  if (id === null) {
+    res.status(400).json({ error: "Invalid teacher" });
+    return;
+  }
+  if (typeof newPassword !== "string" || newPassword.length < 4) {
     res.status(400).json({ error: "Password must be at least 4 characters" });
     return;
   }
   const hash = await bcrypt.hash(newPassword, 10);
-  await db.update(teachersTable)
+  const updated = await db.update(teachersTable)
     .set({ passwordHash: hash, mustChangePassword: true })
-    .where(eq(teachersTable.id, id));
+    .where(eq(teachersTable.id, id))
+    .returning({ id: teachersTable.id });
+  if (updated.length === 0) {
+    res.status(404).json({ error: "Teacher not found" });
+    return;
+  }
   res.json({ ok: true });
 });
 
-// Delete teacher
+// Delete teacher. Their point history stays: the log keeps the name and class
+// it was written with, and only the link to the deleted account is cleared
+// (point_events.teacher_id references teachers.id, so this has to happen
+// first or the delete fails).
 router.delete("/admin/teachers/:id", requireAdmin, async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
-  const admin = (req as any).teacher;
-  if (admin.id === id) {
+  const id = idParam(req.params.id);
+  if (id === null) {
+    res.status(400).json({ error: "Invalid teacher" });
+    return;
+  }
+  if (currentTeacher(req).id === id) {
     res.status(400).json({ error: "Cannot delete yourself" });
     return;
   }
-  await db.delete(teachersTable).where(eq(teachersTable.id, id));
+  await db.transaction(async (tx) => {
+    await tx.update(pointEventsTable).set({ teacherId: null }).where(eq(pointEventsTable.teacherId, id));
+    await tx.delete(teachersTable).where(eq(teachersTable.id, id));
+  });
   res.json({ ok: true });
 });
 

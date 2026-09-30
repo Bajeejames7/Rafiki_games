@@ -3,7 +3,14 @@ import bcrypt from "bcryptjs";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, teachersTable } from "@workspace/db";
-import { generateToken, requireAuth } from "../lib/auth";
+import {
+  clearLoginFailures,
+  currentTeacher,
+  generateToken,
+  loginBlocked,
+  recordLoginFailure,
+  requireAuth,
+} from "../lib/auth";
 
 const router: IRouter = Router();
 
@@ -20,18 +27,21 @@ router.post("/auth/login", async (req, res): Promise<void> => {
   }
 
   const { username, password } = parsed.data;
-  const [teacher] = await db.select().from(teachersTable).where(eq(teachersTable.username, username.toLowerCase().trim()));
-
-  if (!teacher) {
-    res.status(401).json({ error: "Invalid username or password" });
+  const normalized = username.toLowerCase().trim();
+  const limitKey = `${normalized}|${req.ip}`;
+  if (loginBlocked(limitKey)) {
+    res.status(429).json({ error: "Too many failed attempts. Wait 15 minutes and try again." });
     return;
   }
 
-  const valid = await bcrypt.compare(password, teacher.passwordHash);
-  if (!valid) {
+  const [teacher] = await db.select().from(teachersTable).where(eq(teachersTable.username, normalized));
+  const valid = teacher ? await bcrypt.compare(password, teacher.passwordHash) : false;
+  if (!teacher || !valid) {
+    recordLoginFailure(limitKey);
     res.status(401).json({ error: "Invalid username or password" });
     return;
   }
+  clearLoginFailures(limitKey);
 
   const token = generateToken(teacher.id);
 
@@ -58,7 +68,7 @@ router.post("/auth/logout", requireAuth, async (req, res): Promise<void> => {
 });
 
 router.get("/auth/me", requireAuth, async (req, res): Promise<void> => {
-  const teacher = (req as any).teacher;
+  const teacher = currentTeacher(req);
   res.json({
     id: teacher.id,
     username: teacher.username,
@@ -71,9 +81,9 @@ router.get("/auth/me", requireAuth, async (req, res): Promise<void> => {
 });
 
 router.post("/auth/change-password", requireAuth, async (req, res): Promise<void> => {
-  const teacher = (req as any).teacher;
-  const { newPassword } = req.body;
-  if (!newPassword || newPassword.length < 4) {
+  const teacher = currentTeacher(req);
+  const { newPassword } = req.body ?? {};
+  if (typeof newPassword !== "string" || newPassword.length < 4) {
     res.status(400).json({ error: "Password must be at least 4 characters" });
     return;
   }

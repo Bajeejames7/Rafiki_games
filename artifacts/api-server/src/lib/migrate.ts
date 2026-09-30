@@ -21,6 +21,17 @@ export async function runMigrations() {
       ON "daily_points" ("team_id", "date");
     `);
     
+    // Migration 0002: idempotent point events. A phone that retries a request
+    // after a timeout sends the same client_event_id again; the unique index
+    // makes the second copy a no-op instead of double points.
+    await client.query(`
+      ALTER TABLE "point_events" ADD COLUMN IF NOT EXISTS "client_event_id" text;
+    `);
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS "point_events_client_event_id_idx"
+      ON "point_events" ("client_event_id");
+    `);
+
     console.log("[Migration] ✓ Database migrations completed");
   } catch (err) {
     console.error("[Migration] ✗ Migration failed:", err);

@@ -2,8 +2,10 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Animated,
+  AppState,
   Image,
   ImageBackground,
   Keyboard,
@@ -28,19 +30,13 @@ import { useAuth } from "@/hooks/useAuth";
 import { LoginScreen } from "@/components/LoginScreen";
 import { ChangePasswordScreen } from "@/components/ChangePasswordScreen";
 import { AdminPanel } from "@/components/AdminPanel";
+import { API_BASE } from "@/constants/api";
 
 const schoolLogo = require("@/assets/images/school-logo.png");
 const schoolBg = require("@/assets/images/school-bg.jpg");
 
 const TEACHER_KEY = "@virtue_teacher";
 
-// Hardcoded API base URL for production builds
-// Falls back to localhost for local development
-const API_BASE = __DEV__
-  ? (process.env.EXPO_PUBLIC_DOMAIN
-      ? `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`
-      : "http://localhost:3000/api")
-  : "https://rafiki-games.onrender.com/api";
 
 // Retry fetch with exponential backoff
 async function fetchWithRetry(
@@ -94,6 +90,10 @@ async function apiFetchScores(): Promise<{ liveStandings: Scores; todayPoints: S
   }
 }
 
+function newEventId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 async function apiPostEvent(
   token: string,
   teamId: string, teamName: string, amount: number,
@@ -104,7 +104,9 @@ async function apiPostEvent(
       {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ teamId, teamName, amount }),
+        // The retry below can re-send a request the server already handled
+        // (it timed out on the way back). The id lets the server count it once.
+        body: JSON.stringify({ teamId, teamName, amount, clientEventId: newEventId() }),
       },
       2,
       20000
@@ -182,6 +184,42 @@ async function apiResetScores(token: string): Promise<{ liveStandings: Scores; t
   }
 }
 
+async function apiResetTeam(
+  token: string,
+  teamId: string,
+  teamName: string,
+): Promise<{ liveStandings: Scores; todayPoints: Scores } | null> {
+  const res = await fetchWithRetry(
+    `${API_BASE}/scores/reset-team`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ teamId, teamName }),
+    },
+    1,
+    15000,
+  );
+  if (res.status === 401) throw new Error("UNAUTHORIZED");
+  return res.ok ? await res.json() : null;
+}
+
+interface WeekSummary {
+  today: string;
+  totals: Scores;
+  days: { date: string; totals: Scores; awards: number; teachers: string[] }[];
+}
+
+async function apiFetchWeek(token: string): Promise<WeekSummary | null> {
+  try {
+    const res = await fetchWithRetry(`${API_BASE}/scores/week`, { headers: { Authorization: `Bearer ${token}` } }, 1, 15000);
+    if (res.status === 401) throw new Error("UNAUTHORIZED");
+    return res.ok ? await res.json() : null;
+  } catch (err: any) {
+    if (err.message === "UNAUTHORIZED") throw err;
+    return null;
+  }
+}
+
 interface LogEntry {
   id: string;
   teacherName: string;
@@ -202,61 +240,30 @@ function formatTime(ts: number): string {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function getDayLabel(ts: number): string {
-  const d = new Date(ts);
-  const today = new Date();
-  if (d.toDateString() === today.toDateString()) return "Today";
-  const yest = new Date(today); yest.setDate(today.getDate() - 1);
-  if (d.toDateString() === yest.toDateString()) return "Yesterday";
-  return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
-}
-
-function getDayKey(ts: number): string {
-  const d = new Date(ts);
-  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-}
-
-function isThisWeek(ts: number): boolean {
-  const now = new Date();
-  const monday = new Date(now);
-  monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
-  monday.setHours(0, 0, 0, 0);
-  return ts >= monday.getTime();
-}
-
-function calcTotals(entries: LogEntry[]): Record<string, number> {
-  const totals: Record<string, number> = {};
-  for (const e of entries) {
-    totals[e.teamId] = (totals[e.teamId] ?? 0) + e.amount;
-  }
-  return totals;
+function dayLabel(date: string, today: string): string {
+  if (date === today) return "Today";
+  const [y, m, d] = date.split("-").map(Number);
+  const [ty, tm, td] = today.split("-").map(Number);
+  const diffDays = Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(y, m - 1, d)) / 86400000);
+  if (diffDays === 1) return "Yesterday";
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(undefined, {
+    weekday: "long", month: "short", day: "numeric", timeZone: "UTC",
+  });
 }
 
 function WeeklyModal({
   visible,
-  log,
+  week,
   onClose,
 }: {
   visible: boolean;
-  log: LogEntry[];
+  week: WeekSummary | null;
   onClose: () => void;
 }) {
   const insets = useSafeAreaInsets();
 
-  const weekEntries = log.filter((e) => isThisWeek(e.timestamp) && e.amount > 0);
-
-  // Group by day key
-  const dayMap = new Map<string, { label: string; ts: number; entries: LogEntry[] }>();
-  for (const e of weekEntries) {
-    const key = getDayKey(e.timestamp);
-    if (!dayMap.has(key)) {
-      dayMap.set(key, { label: getDayLabel(e.timestamp), ts: e.timestamp, entries: [] });
-    }
-    dayMap.get(key)!.entries.push(e);
-  }
-  const days = Array.from(dayMap.values()).sort((a, b) => b.ts - a.ts);
-
-  const weeklyTotals = calcTotals(weekEntries);
+  const weeklyTotals = week?.totals ?? {};
+  const days = week?.days ?? [];
   const rankedByWeek = [...TEAMS].sort((a, b) => (weeklyTotals[b.id] ?? 0) - (weeklyTotals[a.id] ?? 0));
   const weeklyGrand = Object.values(weeklyTotals).reduce((a, b) => a + b, 0);
 
@@ -268,7 +275,9 @@ function WeeklyModal({
           <View style={wkStyles.sheetHeader}>
             <View>
               <Text style={wkStyles.title}>Weekly Leaderboard</Text>
-              <Text style={wkStyles.sub}>{weeklyGrand} pts awarded this week</Text>
+              <Text style={wkStyles.sub}>
+                {week === null ? "Loading…" : `${weeklyGrand} pts awarded this week`}
+              </Text>
             </View>
             <TouchableOpacity onPress={onClose} style={wkStyles.closeBtn} activeOpacity={0.7}>
               <Feather name="x" size={18} color="#8B949E" />
@@ -284,7 +293,7 @@ function WeeklyModal({
                 const pts = weeklyTotals[team.id] ?? 0;
                 const maxPts = weeklyTotals[rankedByWeek[0].id] ?? 1;
                 const barWidth = maxPts > 0 ? Math.max((pts / maxPts) * 100, pts > 0 ? 6 : 0) : 0;
-                const medal = ["🥇", "🥈", "🥉", ""][idx] ?? "";
+                const medal = pts > 0 ? (["🥇", "🥈", "🥉", ""][idx] ?? "") : "";
                 return (
                   <View key={team.id} style={wkStyles.teamRow}>
                     <Text style={wkStyles.medal}>{medal}</Text>
@@ -303,41 +312,40 @@ function WeeklyModal({
             </View>
 
             {/* Day-by-day breakdown */}
-            {days.length === 0 ? (
+            {week === null ? (
+              <ActivityIndicator style={{ marginTop: 24 }} color="#5B8AF5" />
+            ) : days.length === 0 ? (
               <View style={wkStyles.empty}>
                 <Text style={wkStyles.emptyIcon}>📅</Text>
                 <Text style={wkStyles.emptyText}>No points awarded this week</Text>
               </View>
             ) : (
               days.map((day) => {
-                const dayTotals = calcTotals(day.entries);
-                const dayGrand = Object.values(dayTotals).reduce((a, b) => a + b, 0);
-                const isToday = getDayKey(Date.now()) === getDayKey(day.ts);
+                const dayGrand = Object.values(day.totals).reduce((a, b) => a + b, 0);
+                const isToday = day.date === week.today;
                 return (
-                  <View key={getDayKey(day.ts)} style={wkStyles.section}>
+                  <View key={day.date} style={wkStyles.section}>
                     <View style={wkStyles.dayHeader}>
                       <Text style={[wkStyles.sectionLabel, isToday && { color: "#5B8AF5" }]}>
-                        {day.label.toUpperCase()}
+                        {dayLabel(day.date, week.today).toUpperCase()}
                       </Text>
                       <Text style={wkStyles.dayTotal}>{dayGrand} pts total</Text>
                     </View>
                     {[...TEAMS]
-                      .filter((t) => (dayTotals[t.id] ?? 0) > 0)
-                      .sort((a, b) => (dayTotals[b.id] ?? 0) - (dayTotals[a.id] ?? 0))
+                      .filter((t) => (day.totals[t.id] ?? 0) > 0)
+                      .sort((a, b) => (day.totals[b.id] ?? 0) - (day.totals[a.id] ?? 0))
                       .map((team) => {
                         const tc = colors.teams[team.id];
-                        const pts = dayTotals[team.id] ?? 0;
                         return (
                           <View key={team.id} style={wkStyles.dayTeamRow}>
                             <View style={[wkStyles.dot, { backgroundColor: tc.primary }]} />
                             <Text style={[wkStyles.dayTeamName, { color: tc.text }]}>{team.name}</Text>
-                            <Text style={[wkStyles.dayTeamPts, { color: tc.primary }]}>+{pts}</Text>
+                            <Text style={[wkStyles.dayTeamPts, { color: tc.primary }]}>+{day.totals[team.id]}</Text>
                           </View>
                         );
                       })}
                     <Text style={wkStyles.submissionCount}>
-                      {day.entries.length} award{day.entries.length !== 1 ? "s" : ""} by{" "}
-                      {[...new Set(day.entries.map((e) => e.teacherName))].join(", ")}
+                      {day.awards} award{day.awards !== 1 ? "s" : ""} by {day.teachers.join(", ")}
                     </Text>
                   </View>
                 );
@@ -492,11 +500,13 @@ function HistoryModal({
   onLoadMore,
   hasMore,
   loading,
+  canReset,
 }: {
   visible: boolean;
   log: LogEntry[];
   onClose: () => void;
   onClear: () => void;
+  canReset: boolean;
   onLoadMore: () => void;
   hasMore: boolean;
   loading: boolean;
@@ -514,10 +524,10 @@ function HistoryModal({
               <Text style={histStyles.sheetSub}>{log.length} event{log.length !== 1 ? "s" : ""} loaded</Text>
             </View>
             <View style={histStyles.headerBtns}>
-              {log.length > 0 && (
+              {canReset && (
                 <TouchableOpacity onPress={onClear} style={histStyles.clearBtn} activeOpacity={0.7}>
-                  <Feather name="trash-2" size={14} color="#ef4444" />
-                  <Text style={histStyles.clearBtnText}>Clear</Text>
+                  <Feather name="rotate-ccw" size={14} color="#ef4444" />
+                  <Text style={histStyles.clearBtnText}>Reset standings</Text>
                 </TouchableOpacity>
               )}
               <TouchableOpacity onPress={onClose} style={histStyles.closeBtn} activeOpacity={0.7}>
@@ -534,7 +544,7 @@ function HistoryModal({
             </View>
           ) : (
             <ScrollView showsVerticalScrollIndicator={false} style={histStyles.list}>
-              {[...log].reverse().map((entry) => {
+              {log.map((entry) => {
                 const tc = colors.teams[entry.teamId as keyof typeof colors.teams];
                 const sign = entry.amount > 0 ? "+" : "";
                 return (
@@ -1111,7 +1121,8 @@ function TeamCard({
   rank: number;
   onAdd: (amount: number) => void;
   onSubtract: () => void;
-  onReset: () => void;
+  /** Admins only; without it the card has no long-press action. */
+  onReset?: () => void;
 }) {
   const tc = colors.teams[team.id];
   const scaleAnim = useRef(new Animated.Value(1)).current;
@@ -1129,10 +1140,12 @@ function TeamCard({
     onAdd(amount);
   };
 
-  const handleLongPress = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    onReset();
-  };
+  const handleLongPress = onReset
+    ? () => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+        onReset();
+      }
+    : undefined;
 
   const borderColor = glowAnim.interpolate({
     inputRange: [0, 1],
@@ -1544,6 +1557,22 @@ const dpStyles = StyleSheet.create({
   },
 });
 
+const POLL_MS = 5000;
+const LOG_PAGE = 50;
+
+/** The newest page from the server on top, then the older entries already loaded. */
+function mergeNewestPage(fresh: LogEntry[], loaded: LogEntry[]): LogEntry[] {
+  if (loaded.length <= fresh.length) return fresh;
+  const oldestFresh = Math.min(...fresh.map((e) => Number(e.id)));
+  return [...fresh, ...loaded.filter((e) => Number(e.id) < oldestFresh)];
+}
+
+/** Older entries at the bottom, skipping any already on the list. */
+function appendOlder(loaded: LogEntry[], older: LogEntry[]): LogEntry[] {
+  const seen = new Set(loaded.map((e) => e.id));
+  return [...loaded, ...older.filter((e) => !seen.has(e.id))];
+}
+
 export default function HomeScreen() {
   const { token, teacher, loading: authLoading, login, logout, changePassword } = useAuth();
   const [showAdmin, setShowAdmin] = useState(false);
@@ -1555,7 +1584,6 @@ export default function HomeScreen() {
     wisdom: 0, justice: 0, fortitude: 0, temperance: 0,
   });
   const [log, setLog] = useState<LogEntry[]>([]);
-  const [logOffset, setLogOffset] = useState(0);
   const [hasMoreLog, setHasMoreLog] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -1569,65 +1597,91 @@ export default function HomeScreen() {
   const bg = isDark ? colors.dark.background : "#0D1117";
   const mutedColor = "#8B949E";
 
+  const [week, setWeek] = useState<WeekSummary | null>(null);
+  const inFlight = useRef(false);
+
   const refreshFromServer = useCallback(async () => {
+    // One sync at a time: on a slow connection a request can take longer than
+    // the poll interval, and stacking them up only makes it slower.
+    if (inFlight.current) return;
+    inFlight.current = true;
     try {
-      console.log('[Sync] Fetching from server...');
       const [serverData, serverLog] = await Promise.all([
         apiFetchScores(),
-        token ? apiFetchLog(token, 50, 0) : Promise.resolve([]),
+        token ? apiFetchLog(token, LOG_PAGE, 0) : Promise.resolve([]),
       ]);
       if (serverData) {
-        console.log('[Sync] Scores received:', serverData);
         setScores(serverData.liveStandings);
         setTodayPoints(serverData.todayPoints);
         setOnline(true);
       } else {
-        console.warn('[Sync] Failed to fetch scores');
         setOnline(false);
       }
       if (serverLog.length > 0) {
-        console.log('[Sync] Log entries received:', serverLog.length);
-        setLog(serverLog);
-        setLogOffset(serverLog.length);
-        setHasMoreLog(serverLog.length >= 50);
+        // Put the newest page on top of what is already loaded, rather than
+        // replacing it — otherwise every poll throws away "Load More" pages.
+        setLog((prev) => mergeNewestPage(serverLog, prev));
+        setHasMoreLog((prev) => prev || serverLog.length >= LOG_PAGE);
       }
     } catch (err: any) {
-      console.error('[Sync] Error:', err);
-      if (err.message === "UNAUTHORIZED") {
-        // Token expired — force logout
-        logout();
-      }
+      if (err.message === "UNAUTHORIZED") logout();
+    } finally {
+      inFlight.current = false;
     }
   }, [token, logout]);
 
   const loadMoreLog = useCallback(async () => {
     if (!token || loadingMore || !hasMoreLog) return;
-    
     setLoadingMore(true);
     try {
-      const moreLog = await apiFetchLog(token, 50, logOffset);
-      if (moreLog.length > 0) {
-        setLog((prev) => [...prev, ...moreLog]);
-        setLogOffset((prev) => prev + moreLog.length);
-        setHasMoreLog(moreLog.length >= 50);
-      } else {
-        setHasMoreLog(false);
-      }
+      // The loaded list is contiguous from the newest entry down, so its
+      // length is exactly the offset of the next older page.
+      const moreLog = await apiFetchLog(token, LOG_PAGE, log.length);
+      setLog((prev) => appendOlder(prev, moreLog));
+      setHasMoreLog(moreLog.length >= LOG_PAGE);
     } catch (err: any) {
-      console.error('[LoadMore] Error:', err);
-      if (err.message === "UNAUTHORIZED") {
-        logout();
-      }
+      if (err.message === "UNAUTHORIZED") logout();
     } finally {
       setLoadingMore(false);
     }
-  }, [token, loadingMore, hasMoreLog, logOffset, logout]);
+  }, [token, loadingMore, hasMoreLog, log.length, logout]);
 
+  // Poll while the app is on screen; stop when it goes to the background (no
+  // point spending a teacher's data and battery on a phone in a pocket), and
+  // catch up at once when it comes back.
   useEffect(() => {
-    refreshFromServer();
-    const interval = setInterval(refreshFromServer, 3000);
-    return () => clearInterval(interval);
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      if (interval) return;
+      refreshFromServer();
+      interval = setInterval(refreshFromServer, POLL_MS);
+    };
+    const stop = () => {
+      if (interval) clearInterval(interval);
+      interval = null;
+    };
+    if (AppState.currentState === "active" || Platform.OS === "web") start();
+    const sub = AppState.addEventListener("change", (state) => (state === "active" ? start() : stop()));
+    return () => {
+      stop();
+      sub.remove();
+    };
   }, [refreshFromServer]);
+
+  // The weekly board is fetched when it is opened, and kept fresh while open.
+  useEffect(() => {
+    if (!showWeekly || !token) return;
+    let live = true;
+    const load = () => apiFetchWeek(token).then((w) => { if (live && w) setWeek(w); }).catch((err) => {
+      if (err.message === "UNAUTHORIZED") logout();
+    });
+    load();
+    const interval = setInterval(load, 15000);
+    return () => {
+      live = false;
+      clearInterval(interval);
+    };
+  }, [showWeekly, token, logout]);
 
   // Show auth screens before main app
   if (authLoading) return null;
@@ -1644,131 +1698,55 @@ export default function HomeScreen() {
     return <AdminPanel token={token} onClose={() => setShowAdmin(false)} />;
   }
 
-  const handleAdd = async (teamId: string, amount: number) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const team = TEAMS.find((t) => t.id === teamId);
-    console.log('[Action] Adding points:', { teamId, amount, teamName: team?.name });
-    
-    // Optimistic update
-    setScores((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? 0) + amount }));
-    setTodayPoints((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? 0) + amount }));
-    setSyncing(true);
-    
-    try {
-      const updated = await apiPostEvent(token!, teamId, team?.name ?? teamId, amount);
-      setSyncing(false);
-      
-      if (updated) {
-        console.log('[Action] Points added successfully, updated scores:', updated);
-        setScores(updated.liveStandings);
-        setTodayPoints(updated.todayPoints);
-        const freshLog = await apiFetchLog(token!, 50, 0);
-        if (freshLog.length > 0) {
-          setLog(freshLog);
-          setLogOffset(freshLog.length);
-          setHasMoreLog(freshLog.length >= 50);
-        }
-      } else {
-        console.error('[Action] Failed to add points - no response from server');
-        // Revert optimistic update
-        setScores((prev) => ({ ...prev, [teamId]: Math.max(0, (prev[teamId] ?? 0) - amount) }));
-        setTodayPoints((prev) => ({ ...prev, [teamId]: Math.max(0, (prev[teamId] ?? 0) - amount) }));
-        Alert.alert(
-          "Sync Failed",
-          "Couldn't save points to server. Check your internet connection.",
-          [{ text: "OK" }]
-        );
-      }
-    } catch (err: any) {
-      setSyncing(false);
-      console.error('[Action] Error adding points:', err);
-      
-      if (err.message === "UNAUTHORIZED") {
-        logout();
-      } else {
-        // Revert optimistic update
-        setScores((prev) => ({ ...prev, [teamId]: Math.max(0, (prev[teamId] ?? 0) - amount) }));
-        setTodayPoints((prev) => ({ ...prev, [teamId]: Math.max(0, (prev[teamId] ?? 0) - amount) }));
-        Alert.alert(
-          "Connection Error",
-          "Failed to connect to server. Please try again.",
-          [{ text: "OK" }]
-        );
-      }
-    }
+  const refreshLogTop = async () => {
+    const fresh = await apiFetchLog(token, LOG_PAGE, 0);
+    if (fresh.length > 0) setLog((prev) => mergeNewestPage(fresh, prev));
   };
 
-  const handleSubtract = async (teamId: string) => {
+  // +1/+5/+10 and −1 all go through here.
+  const award = async (teamId: string, amount: number) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const current = scores[teamId] ?? 0;
-    if (current === 0) return;
     const team = TEAMS.find((t) => t.id === teamId);
-    
-    // Optimistic update
-    setScores((prev) => ({ ...prev, [teamId]: Math.max(0, (prev[teamId] ?? 0) - 1) }));
-    setTodayPoints((prev) => ({ ...prev, [teamId]: Math.max(0, (prev[teamId] ?? 0) - 1) }));
+    if (amount < 0 && (scores[teamId] ?? 0) === 0) return;
+
+    const bump = (delta: number) => (prev: Scores) => ({ ...prev, [teamId]: Math.max(0, (prev[teamId] ?? 0) + delta) });
+    // Optimistic update; the server's numbers replace it as soon as they arrive.
+    setScores(bump(amount));
+    setTodayPoints(bump(amount));
     setSyncing(true);
-    
+
     try {
-      const updated = await apiPostEvent(token!, teamId, team?.name ?? teamId, -1);
-      setSyncing(false);
-      
+      const updated = await apiPostEvent(token, teamId, team?.name ?? teamId, amount);
       if (updated) {
         setScores(updated.liveStandings);
         setTodayPoints(updated.todayPoints);
-        const freshLog = await apiFetchLog(token!, 50, 0);
-        if (freshLog.length > 0) {
-          setLog(freshLog);
-          setLogOffset(freshLog.length);
-          setHasMoreLog(freshLog.length >= 50);
-        }
+        await refreshLogTop();
       } else {
-        // Revert optimistic update
-        setScores((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? 0) + 1 }));
-        setTodayPoints((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? 0) + 1 }));
-        Alert.alert(
-          "Sync Failed",
-          "Couldn't save to server. Check your connection.",
-          [{ text: "OK" }]
-        );
+        setScores(bump(-amount));
+        setTodayPoints(bump(-amount));
+        Alert.alert("Sync Failed", "Couldn't save points to the server. Check your internet connection.");
       }
     } catch (err: any) {
-      setSyncing(false);
-      
       if (err.message === "UNAUTHORIZED") {
         logout();
       } else {
-        // Revert optimistic update
-        setScores((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? 0) + 1 }));
-        Alert.alert(
-          "Connection Error",
-          "Failed to connect to server. Try again.",
-          [{ text: "OK" }]
-        );
+        setScores(bump(-amount));
+        setTodayPoints(bump(-amount));
+        Alert.alert("Connection Error", "Failed to connect to the server. Please try again.");
       }
+    } finally {
+      setSyncing(false);
     }
   };
 
-  const handleClearLog = () => {
-    Alert.alert("Reset Everything?", "This will reset all scores and clear the log on ALL devices.", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Reset",
-        style: "destructive",
-        onPress: async () => {
-          setSyncing(true);
-          await apiResetScores(token!);
-          await refreshFromServer();
-          setSyncing(false);
-        },
-      },
-    ]);
-  };
+  const isAdmin = teacher.role === "admin";
 
+  // Admin only: long-press a house card to put its live standing back to 0.
   const handleResetTeam = (teamId: string, teamName: string) => {
+    if (!isAdmin) return;
     Alert.alert(
       `Reset ${teamName}?`,
-      "This will set their points to 0 for ALL devices.",
+      "This sets their live standing to 0 on ALL devices. Today's points are not affected.",
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -1776,9 +1754,22 @@ export default function HomeScreen() {
           style: "destructive",
           onPress: async () => {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-            setScores((prev) => ({ ...prev, [teamId]: 0 }));
-            await apiPostEvent(token!, teamId, teamName, -(scores[teamId] ?? 0));
-            await refreshFromServer();
+            setSyncing(true);
+            try {
+              const result = await apiResetTeam(token, teamId, teamName);
+              if (result) {
+                setScores(result.liveStandings);
+                setTodayPoints(result.todayPoints);
+                await refreshLogTop();
+              } else {
+                Alert.alert("Reset Failed", "The server did not accept the reset. Try again.");
+              }
+            } catch (err: any) {
+              if (err.message === "UNAUTHORIZED") logout();
+              else Alert.alert("Connection Error", "Failed to connect to the server. Please try again.");
+            } finally {
+              setSyncing(false);
+            }
           },
         },
       ]
@@ -1786,7 +1777,7 @@ export default function HomeScreen() {
   };
 
   const handleResetAll = () => {
-    if (teacher?.role !== "admin") {
+    if (!isAdmin) {
       Alert.alert("Admin Only", "Only administrators can reset live standings.");
       return;
     }
@@ -1802,13 +1793,19 @@ export default function HomeScreen() {
           onPress: async () => {
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
             setSyncing(true);
-            const result = await apiResetScores(token!);
-            setSyncing(false);
-            if (result) {
-              setScores(result.liveStandings);
-              setTodayPoints(result.todayPoints);
+            try {
+              const result = await apiResetScores(token);
+              if (result) {
+                setScores(result.liveStandings);
+                setTodayPoints(result.todayPoints);
+              } else {
+                Alert.alert("Reset Failed", "The server did not accept the reset. Try again.");
+              }
+            } catch (err: any) {
+              if (err.message === "UNAUTHORIZED") logout();
+            } finally {
+              setSyncing(false);
             }
-            await refreshFromServer();
           },
         },
       ]
@@ -1835,7 +1832,8 @@ export default function HomeScreen() {
         visible={showHistory}
         log={log}
         onClose={() => setShowHistory(false)}
-        onClear={handleClearLog}
+        onClear={handleResetAll}
+        canReset={isAdmin}
         onLoadMore={loadMoreLog}
         hasMore={hasMoreLog}
         loading={loadingMore}
@@ -1843,7 +1841,7 @@ export default function HomeScreen() {
 
       <WeeklyModal
         visible={showWeekly}
-        log={log}
+        week={week}
         onClose={() => setShowWeekly(false)}
       />
 
@@ -1930,9 +1928,9 @@ export default function HomeScreen() {
             team={team}
             score={scores[team.id] ?? 0}
             rank={idx}
-            onAdd={(amount) => handleAdd(team.id, amount)}
-            onSubtract={() => handleSubtract(team.id)}
-            onReset={() => handleResetTeam(team.id, team.name)}
+            onAdd={(amount) => award(team.id, amount)}
+            onSubtract={() => award(team.id, -1)}
+            onReset={isAdmin ? () => handleResetTeam(team.id, team.name) : undefined}
           />
         ))}
 

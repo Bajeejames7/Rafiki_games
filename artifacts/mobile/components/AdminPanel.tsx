@@ -5,20 +5,15 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
+import { API_BASE } from "@/constants/api";
 
-// Hardcoded API base URL for production builds
-// Falls back to localhost for local development
-const API_BASE = __DEV__
-  ? (process.env.EXPO_PUBLIC_DOMAIN
-      ? `https://${process.env.EXPO_PUBLIC_DOMAIN}/api`
-      : "http://localhost:3000/api")
-  : "https://rafiki-games.onrender.com/api";
 
 const BLOCKS = ["primary", "jss", "sss"] as const;
 type Block = typeof BLOCKS[number];
 
 interface TeacherEntry {
   id: number;
+  username: string;
   firstName: string;
   lastName: string;
   block: string;
@@ -41,11 +36,20 @@ export function AdminPanel({ token, onClose }: Props) {
 
   const headers = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   const fetchTeachers = useCallback(async () => {
     setLoading(true);
-    const res = await fetch(`${API_BASE}/admin/teachers`, { headers });
-    if (res.ok) setTeachers(await res.json());
-    setLoading(false);
+    try {
+      const res = await fetch(`${API_BASE}/admin/teachers`, { headers });
+      if (!res.ok) throw new Error(`Server answered ${res.status}`);
+      setTeachers(await res.json());
+      setLoadError(null);
+    } catch {
+      setLoadError("Could not load teachers. Check the connection and try again.");
+    } finally {
+      setLoading(false);
+    }
   }, [token]);
 
   useEffect(() => { fetchTeachers(); }, [fetchTeachers]);
@@ -55,7 +59,15 @@ export function AdminPanel({ token, onClose }: Props) {
       { text: "Cancel", style: "cancel" },
       {
         text: "Delete", style: "destructive", onPress: async () => {
-          await fetch(`${API_BASE}/admin/teachers/${t.id}`, { method: "DELETE", headers });
+          try {
+            const res = await fetch(`${API_BASE}/admin/teachers/${t.id}`, { method: "DELETE", headers });
+            if (!res.ok) {
+              const e = await res.json().catch(() => ({}));
+              Alert.alert("Not deleted", e.error ?? "The server refused the delete.");
+            }
+          } catch {
+            Alert.alert("Not deleted", "Could not reach the server. Try again.");
+          }
           fetchTeachers();
         },
       },
@@ -79,13 +91,18 @@ export function AdminPanel({ token, onClose }: Props) {
 
       {loading ? (
         <ActivityIndicator color="#5B8AF5" style={{ marginTop: 40 }} />
+      ) : loadError ? (
+        <TouchableOpacity onPress={fetchTeachers} style={{ padding: 24, alignItems: "center", gap: 8 }}>
+          <Text style={styles.meta}>{loadError}</Text>
+          <Text style={[styles.meta, { color: "#5B8AF5" }]}>Tap to retry</Text>
+        </TouchableOpacity>
       ) : (
         <ScrollView contentContainerStyle={styles.list}>
           {teachers.map((t) => (
             <View key={t.id} style={styles.card}>
               <View style={styles.cardLeft}>
                 <View style={styles.idBadge}>
-                  <Text style={styles.idText}>ID: {t.id}</Text>
+                  <Text style={styles.idText}>@{t.username}</Text>
                 </View>
                 <View>
                   <Text style={styles.name}>{t.firstName} {t.lastName}</Text>
@@ -155,11 +172,18 @@ function CreateTeacherModal({ visible, token, onClose, onCreated }: {
     }
     if (password.length < 4) { setError("Password min 4 chars"); return; }
     setLoading(true); setError(null);
-    const res = await fetch(`${API_BASE}/admin/teachers`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ username: username.trim(), firstName: firstName.trim(), lastName: lastName.trim(), block, password, role }),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE}/admin/teachers`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ username: username.trim(), firstName: firstName.trim(), lastName: lastName.trim(), block, password, role }),
+      });
+    } catch {
+      setLoading(false);
+      setError("Could not reach the server. Try again.");
+      return;
+    }
     setLoading(false);
     if (!res.ok) {
       const e = await res.json().catch(() => ({ error: "Failed" }));
@@ -231,17 +255,24 @@ function ResetPasswordModal({ visible, teacherId, token, onClose }: {
   const [newPassword, setNewPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleReset = async () => {
-    if (newPassword.length < 4) return;
-    setLoading(true);
-    await fetch(`${API_BASE}/admin/teachers/${teacherId}/reset-password`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ newPassword }),
-    });
-    setLoading(false);
-    setDone(true);
+    if (newPassword.length < 4) { setError("Password min 4 chars"); return; }
+    setLoading(true); setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/admin/teachers/${teacherId}/reset-password`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ newPassword }),
+      });
+      if (res.ok) setDone(true);
+      else setError((await res.json().catch(() => ({}))).error ?? "Reset failed");
+    } catch {
+      setError("Could not reach the server. Try again.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -260,6 +291,7 @@ function ResetPasswordModal({ visible, teacherId, token, onClose }: {
         ) : (
           <>
             <TextInput style={styles.modalInput} placeholder="New password" placeholderTextColor="#555" value={newPassword} onChangeText={setNewPassword} secureTextEntry />
+            {error && <Text style={styles.modalError}>{error}</Text>}
             <TouchableOpacity style={[styles.createBtn, loading && { opacity: 0.5 }]} onPress={handleReset} disabled={loading}>
               {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Reset Password</Text>}
             </TouchableOpacity>

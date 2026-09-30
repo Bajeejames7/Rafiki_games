@@ -1,6 +1,8 @@
 import { pgTable, serial, text, integer, timestamp, date } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
-import { z } from "zod";
+
+// The four houses. Every score route validates team ids against this list.
+export const TEAM_IDS = ["wisdom", "justice", "fortitude", "temperance"] as const;
+export type TeamId = typeof TEAM_IDS[number];
 
 export const teamScoresTable = pgTable("team_scores", {
   teamId: text("team_id").primaryKey(),
@@ -24,11 +26,11 @@ export const pointEventsTable = pgTable("point_events", {
   teamId: text("team_id").notNull(),
   teamName: text("team_name").notNull(),
   amount: integer("amount").notNull(),
+  clientEventId: text("client_event_id").unique("point_events_client_event_id_idx"), // set by the phone; dedupes retries
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const insertPointEventSchema = createInsertSchema(pointEventsTable).omit({ id: true, createdAt: true });
-export type InsertPointEvent = z.infer<typeof insertPointEventSchema>;
+export type InsertPointEvent = typeof pointEventsTable.$inferInsert;
 export type PointEvent = typeof pointEventsTable.$inferSelect;
 export type TeamScore = typeof teamScoresTable.$inferSelect;
 export type DailyPoints = typeof dailyPointsTable.$inferSelect;
