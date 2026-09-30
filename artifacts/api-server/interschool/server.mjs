@@ -51145,7 +51145,12 @@ var Team = external_exports.object({
   name: text(30),
   color: external_exports.string().regex(/^#[0-9a-fA-F]{6}$/)
 });
+var Logo = external_exports.string().max(3e5, "That logo is too large; use a smaller image").refine(
+  (v) => v === "" || /^logos\/[a-z0-9_-]+\.(png|jpg|jpeg|webp|svg)$/.test(v) || /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(v),
+  "Upload a PNG, JPG or WebP image"
+);
 var Settings = external_exports.object({
+  logo: Logo,
   name: text(60),
   shortCode: text(4).transform((s) => s.toUpperCase()),
   color: external_exports.string().regex(/^#[0-9a-fA-F]{6}$/),
@@ -51185,7 +51190,8 @@ function present(p) {
     defaultSchedule: p.default_schedule,
     teams: p.teams,
     categories: p.categories,
-    archived: p.archived
+    archived: p.archived,
+    logo: p.logo
   };
 }
 programRoutes.get("/programs", async (req, res) => {
@@ -51259,6 +51265,7 @@ programRoutes.patch("/programs/:slug", async (req, res) => {
     throw new HttpError(400, "Each availability choice needs a different id");
   }
   const columns = {
+    logo: body.logo,
     name: body.name,
     short_code: body.shortCode,
     color: body.color,
@@ -51650,7 +51657,7 @@ function createApp(webDir) {
         index: false,
         maxAge: "1h",
         setHeaders: (res, file2) => {
-          if (file2.endsWith(".html") || file2.endsWith(".webmanifest")) noCache(res);
+          if (/\.(html|webmanifest|json)$/.test(file2)) noCache(res);
         }
       })
     );
@@ -51846,6 +51853,18 @@ var migrations = [
       ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
       ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('user', 'admin', 'superadmin'));
       ALTER TABLE users ADD COLUMN must_change_password boolean NOT NULL DEFAULT false;
+    `
+  },
+  {
+    // Each school's own logo: a file shipped with the app ("logos/x.png") or
+    // one uploaded from Setup (a small data: URL). Empty shows the initials.
+    id: "004_program_logos",
+    sql: `
+      ALTER TABLE programs ADD COLUMN logo text NOT NULL DEFAULT '';
+      UPDATE programs SET logo = 'logos/rafiki.png'    WHERE slug = 'rafiki';
+      UPDATE programs SET logo = 'logos/daniels.png'   WHERE slug = 'daniels';
+      UPDATE programs SET logo = 'logos/icc-imara.png' WHERE slug = 'icc-imara';
+      UPDATE programs SET logo = 'logos/rosslyn.png'   WHERE slug = 'rosslyn';
     `
   }
 ];
