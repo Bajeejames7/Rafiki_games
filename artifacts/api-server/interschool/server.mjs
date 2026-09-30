@@ -51155,6 +51155,7 @@ var Settings = external_exports.object({
   shortCode: text(4).transform((s) => s.toUpperCase()),
   color: external_exports.string().regex(/^#[0-9a-fA-F]{6}$/),
   coordinatorName: external_exports.string().trim().max(80),
+  coordinatorTitle: external_exports.string().trim().max(60),
   tagline: external_exports.string().trim().max(80),
   notes: external_exports.string().trim().max(5e3),
   sessionWeekday: external_exports.number().int().min(0).max(6),
@@ -51182,6 +51183,7 @@ function present(p) {
     kind: p.kind,
     color: p.color,
     coordinatorName: p.coordinator_name,
+    coordinatorTitle: p.coordinator_title,
     tagline: p.tagline,
     notes: p.notes,
     sessionWeekday: p.session_weekday,
@@ -51270,6 +51272,7 @@ programRoutes.patch("/programs/:slug", async (req, res) => {
     short_code: body.shortCode,
     color: body.color,
     coordinator_name: body.coordinatorName,
+    coordinator_title: body.coordinatorTitle,
     tagline: body.tagline,
     notes: body.notes,
     session_weekday: body.sessionWeekday,
@@ -51865,6 +51868,29 @@ var migrations = [
       UPDATE programs SET logo = 'logos/daniels.png'   WHERE slug = 'daniels';
       UPDATE programs SET logo = 'logos/icc-imara.png' WHERE slug = 'icc-imara';
       UPDATE programs SET logo = 'logos/rosslyn.png'   WHERE slug = 'rosslyn';
+    `
+  },
+  {
+    // What each school calls its coordinator ("School Sports Coordinator" at
+    // Daniels). Empty means the default for the kind of program. Plus the
+    // details Abel sent on 2026-10-01, each only where the field was still
+    // untouched, so nothing edited in Setup is overwritten.
+    id: "005_coordinator_titles_and_school_details",
+    sql: `
+      ALTER TABLE programs ADD COLUMN coordinator_title text NOT NULL DEFAULT '';
+
+      UPDATE programs SET coordinator_title = 'Intramural Coordinator'
+       WHERE slug = 'rosslyn' AND coordinator_title = '';
+      UPDATE programs SET default_schedule =
+        '[{"time":"09:30","activity":"Session starts"},{"time":"11:30","activity":"Session ends"}]'
+       WHERE slug = 'rosslyn' AND default_schedule = '[]'::jsonb;
+
+      UPDATE programs SET coordinator_title = 'School Sports Coordinator'
+       WHERE slug = 'daniels' AND coordinator_title = '';
+      UPDATE programs SET notes =
+        'Felix Mwendwa manages school-based football engagement at the Daniels School.' || E'\\n\\n' ||
+        'Activities: coaching sessions, skill development drills, and character mentoring integrated with sports.'
+       WHERE slug = 'daniels' AND notes = 'Requirements to be added after the survey.';
     `
   }
 ];
