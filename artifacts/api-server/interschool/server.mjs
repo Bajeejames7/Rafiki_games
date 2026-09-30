@@ -49278,20 +49278,20 @@ function readToken(token) {
   if (Date.now() - issued > TOKEN_DAYS * 24 * 60 * 60 * 1e3) return null;
   return userId;
 }
-function isCreatorEmail(email4) {
-  return config2.creatorEmail !== "" && email4.trim().toLowerCase() === config2.creatorEmail;
+function isSuperAdmin(user) {
+  return user.role === "superadmin" || config2.creatorEmail !== "" && user.email.trim().toLowerCase() === config2.creatorEmail;
 }
 async function loadMe(userId) {
   const row = await one(
-    `SELECT u.id, u.email, u.name, u.role,
+    `SELECT u.id, u.email, u.name, u.role, u.must_change_password AS "mustChangePassword",
             coalesce(array_agg(pa.program_id) FILTER (WHERE pa.program_id IS NOT NULL), '{}') AS coordinates
        FROM users u LEFT JOIN program_admins pa ON pa.user_id = u.id
       WHERE u.id = $1 GROUP BY u.id`,
     [userId]
   );
   if (!row) return null;
-  const isCreator = isCreatorEmail(row.email);
-  return { ...row, isCreator, isAdmin: isCreator || row.role === "admin" };
+  const superAdmin = isSuperAdmin(row);
+  return { ...row, isSuperAdmin: superAdmin, isAdmin: superAdmin || row.role === "admin" };
 }
 function me(req) {
   const found = req.me;
@@ -49308,6 +49308,9 @@ async function requireUser(req, _res, next) {
 }
 function requireAdmin(user) {
   if (!user.isAdmin) throw new HttpError(403, "Only admins can do this");
+}
+function requireSuperAdmin(user) {
+  if (!user.isSuperAdmin) throw new HttpError(403, "Only Abel and James (super admins) can do this");
 }
 function canManage(user, programId) {
   return user.isAdmin || user.coordinates.includes(programId);
@@ -51064,17 +51067,8 @@ var bcryptjs_default = {
 var authRoutes = (0, import_express.Router)();
 var email3 = external_exports.string().trim().toLowerCase().email("Enter a valid email address").max(200);
 var password = external_exports.string().min(8, "Password must be at least 8 characters").max(200);
-var SignUp = external_exports.object({ name: external_exports.string().trim().min(2, "Enter your name").max(80), email: email3, password });
-authRoutes.post("/auth/signup", async (req, res) => {
-  const body = SignUp.parse(req.body);
-  const hash3 = await bcryptjs_default.hash(body.password, 10);
-  const created = await one(
-    `INSERT INTO users (email, name, password_hash) VALUES ($1, $2, $3)
-     ON CONFLICT (lower(email)) DO NOTHING RETURNING id`,
-    [body.email, body.name, hash3]
-  );
-  if (!created) throw new HttpError(409, "An account with this email already exists. Sign in instead.");
-  res.status(201).json({ token: issueToken(created.id), me: await loadMe(created.id) });
+authRoutes.post("/auth/signup", () => {
+  throw new HttpError(403, "Accounts are created by Abel or James. Ask them to add you.");
 });
 var SignIn = external_exports.object({ email: email3, password: external_exports.string().min(1).max(200) });
 authRoutes.post("/auth/login", async (req, res) => {
@@ -51103,7 +51097,10 @@ authRoutes.post("/auth/password", requireUser, async (req, res) => {
   if (!row || !await bcryptjs_default.compare(body.current, row.password_hash)) {
     throw new HttpError(400, "Your current password is not right");
   }
-  await one("UPDATE users SET password_hash = $1 WHERE id = $2", [await bcryptjs_default.hash(body.next, 10), user.id]);
+  await one("UPDATE users SET password_hash = $1, must_change_password = false WHERE id = $2", [
+    await bcryptjs_default.hash(body.next, 10),
+    user.id
+  ]);
   res.json({ ok: true });
 });
 
@@ -51548,7 +51545,7 @@ var userRoutes = (0, import_express5.Router)();
 userRoutes.get("/users", async (req, res) => {
   requireAdmin(me(req));
   const rows = await query(
-    `SELECT u.id, u.email, u.name, u.role, u.created_at,
+    `SELECT u.id, u.email, u.name, u.role, u.created_at, u.must_change_password,
             coalesce(json_agg(json_build_object('id', p.id, 'name', p.name) ORDER BY p.position)
                      FILTER (WHERE p.id IS NOT NULL), '[]') AS coordinates
        FROM users u
@@ -51556,20 +51553,43 @@ userRoutes.get("/users", async (req, res) => {
        LEFT JOIN programs p ON p.id = pa.program_id
       GROUP BY u.id ORDER BY lower(u.name)`
   );
-  res.json(rows.map((r) => ({ ...r, isCreator: isCreatorEmail(r.email) })));
+  res.json(
+    rows.map(({ must_change_password, ...r }) => ({
+      ...r,
+      isSuperAdmin: isSuperAdmin(r),
+      // Still on the temporary password a super admin gave them.
+      pendingFirstSignIn: must_change_password
+    }))
+  );
+});
+var NewPerson = external_exports.object({
+  name: external_exports.string().trim().min(2, "Enter their name").max(80),
+  email: email3,
+  password,
+  role: external_exports.enum(["user", "admin"]).default("user")
+});
+userRoutes.post("/users", async (req, res) => {
+  requireSuperAdmin(me(req));
+  const body = NewPerson.parse(req.body);
+  const created = await one(
+    `INSERT INTO users (email, name, password_hash, role, must_change_password)
+     VALUES ($1, $2, $3, $4, true)
+     ON CONFLICT (lower(email)) DO NOTHING RETURNING id`,
+    [body.email, body.name, await bcryptjs_default.hash(body.password, 10), body.role]
+  );
+  if (!created) throw new HttpError(409, "Someone already has an account with this email");
+  res.status(201).json({ id: created.id });
 });
 async function target(id) {
   const row = await one("SELECT id, email, name, role FROM users WHERE id = $1", [Number(id)]);
   if (!row) throw new HttpError(404, "No such person");
   return row;
 }
-function checkPower(actor, subject, changingAdmin) {
+function checkPower(actor, subject, touchesAdmin) {
   requireAdmin(actor);
-  if (isCreatorEmail(subject.email) && !actor.isCreator) {
-    throw new HttpError(403, "Only the creator can change the creator's account");
-  }
-  if (changingAdmin && !actor.isCreator) {
-    throw new HttpError(403, "Only the creator can change another admin's account");
+  if (isSuperAdmin(subject)) throw new HttpError(403, "Super admins manage their own accounts");
+  if (touchesAdmin && !actor.isSuperAdmin) {
+    throw new HttpError(403, "Only Abel and James can change an admin's account");
   }
 }
 var RoleBody = external_exports.object({ role: external_exports.enum(["user", "admin"]) });
@@ -51577,25 +51597,29 @@ userRoutes.patch("/users/:id/role", async (req, res) => {
   const actor = me(req);
   const { role } = RoleBody.parse(req.body);
   const subject = await target(req.params.id);
-  if (isCreatorEmail(subject.email)) throw new HttpError(400, "The creator is always in charge; their role does not change");
   checkPower(actor, subject, subject.role === "admin" && role !== "admin");
   await query("UPDATE users SET role = $1 WHERE id = $2", [role, subject.id]);
   res.json({ ok: true });
 });
-var PasswordBody = external_exports.object({ password: external_exports.string().min(8, "Password must be at least 8 characters").max(200) });
+var PasswordBody = external_exports.object({ password });
 userRoutes.post("/users/:id/password", async (req, res) => {
   const actor = me(req);
-  const { password: password2 } = PasswordBody.parse(req.body);
+  const body = PasswordBody.parse(req.body);
   const subject = await target(req.params.id);
-  checkPower(actor, subject, subject.role === "admin" && subject.id !== actor.id);
-  await query("UPDATE users SET password_hash = $1 WHERE id = $2", [await bcryptjs_default.hash(password2, 10), subject.id]);
+  if (subject.id === actor.id) throw new HttpError(400, "Change your own password under your account");
+  checkPower(actor, subject, subject.role === "admin");
+  await query("UPDATE users SET password_hash = $1, must_change_password = true WHERE id = $2", [
+    await bcryptjs_default.hash(body.password, 10),
+    subject.id
+  ]);
   res.json({ ok: true });
 });
 userRoutes.delete("/users/:id", async (req, res) => {
   const actor = me(req);
+  requireSuperAdmin(actor);
   const subject = await target(req.params.id);
   if (subject.id === actor.id) throw new HttpError(400, "You cannot remove your own account");
-  checkPower(actor, subject, subject.role === "admin");
+  checkPower(actor, subject, true);
   await query("DELETE FROM users WHERE id = $1", [subject.id]);
   res.json({ ok: true });
 });
@@ -51801,6 +51825,17 @@ var migrations = [
          {"id":"absent","label":"I will not be able to attend","tone":"bad"}]',
        '["Setup & Equipment","Player Check-in","Warmup Lead","Match Coordination"]',
        '[]', '[]', '["Under 9","Under 11","Under 13"]');
+    `
+  },
+  {
+    // Abel and James are super admins: the only people who create accounts.
+    // Public sign-up is gone; a new account must set its own password on
+    // first sign-in.
+    id: "003_super_admins",
+    sql: `
+      ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+      ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('user', 'admin', 'superadmin'));
+      ALTER TABLE users ADD COLUMN must_change_password boolean NOT NULL DEFAULT false;
     `
   }
 ];
