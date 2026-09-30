@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import {
   View, Text, TouchableOpacity, StyleSheet, ScrollView,
-  TextInput, Modal, Alert, ActivityIndicator, Pressable,
+  TextInput, Modal, Alert, ActivityIndicator, Pressable, Image,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
@@ -32,7 +32,8 @@ export function AdminPanel({ token, onClose }: Props) {
   const [teachers, setTeachers] = useState<TeacherEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
-  const [showResetId, setShowResetId] = useState<number | null>(null);
+  const [resetFor, setResetFor] = useState<TeacherEntry | null>(null);
+  const [showAuthenticator, setShowAuthenticator] = useState(false);
 
   const headers = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
 
@@ -79,6 +80,9 @@ export function AdminPanel({ token, onClose }: Props) {
       <View style={styles.header}>
         <Text style={styles.title}>Admin Panel</Text>
         <View style={styles.headerBtns}>
+          <TouchableOpacity style={styles.closeBtn} onPress={() => setShowAuthenticator(true)}>
+            <Feather name="shield" size={17} color="#42C97A" />
+          </TouchableOpacity>
           <TouchableOpacity style={styles.addBtn} onPress={() => setShowCreate(true)}>
             <Feather name="user-plus" size={16} color="#fff" />
             <Text style={styles.addBtnText}>Add Teacher</Text>
@@ -115,7 +119,7 @@ export function AdminPanel({ token, onClose }: Props) {
               <View style={styles.cardActions}>
                 <TouchableOpacity
                   style={styles.actionBtn}
-                  onPress={() => setShowResetId(t.id)}
+                  onPress={() => setResetFor(t)}
                 >
                   <Feather name="key" size={14} color="#F5C518" />
                 </TouchableOpacity>
@@ -138,12 +142,17 @@ export function AdminPanel({ token, onClose }: Props) {
         onCreated={fetchTeachers}
       />
 
-      <ResetPasswordModal
-        visible={showResetId !== null}
-        teacherId={showResetId!}
-        token={token}
-        onClose={() => setShowResetId(null)}
-      />
+      {resetFor && (
+        <ResetPasswordModal
+          teacher={resetFor}
+          token={token}
+          onClose={() => setResetFor(null)}
+        />
+      )}
+
+      {showAuthenticator && (
+        <AuthenticatorModal token={token} onClose={() => setShowAuthenticator(false)} />
+      )}
     </View>
   );
 }
@@ -249,19 +258,37 @@ function CreateTeacherModal({ visible, token, onClose, onCreated }: {
   );
 }
 
-function ResetPasswordModal({ visible, teacherId, token, onClose }: {
-  visible: boolean; teacherId: number; token: string; onClose: () => void;
+function ResetPasswordModal({ teacher, token, onClose }: {
+  teacher: TeacherEntry; token: string; onClose: () => void;
 }) {
   const [newPassword, setNewPassword] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState<"code" | "password" | null>(null);
   const [done, setDone] = useState(false);
+  const [issued, setIssued] = useState<{ code: string; expiresAt: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const handleCode = async () => {
+    setLoading("code"); setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/admin/teachers/${teacher.id}/reset-code`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) setIssued({ code: body.code, expiresAt: body.expiresAt });
+      else setError(body.error ?? "Could not make a code");
+    } catch {
+      setError("Could not reach the server. Try again.");
+    } finally {
+      setLoading(null);
+    }
+  };
 
   const handleReset = async () => {
     if (newPassword.length < 4) { setError("Password min 4 chars"); return; }
-    setLoading(true); setError(null);
+    setLoading("password"); setError(null);
     try {
-      const res = await fetch(`${API_BASE}/admin/teachers/${teacherId}/reset-password`, {
+      const res = await fetch(`${API_BASE}/admin/teachers/${teacher.id}/reset-password`, {
         method: "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ newPassword }),
@@ -271,32 +298,179 @@ function ResetPasswordModal({ visible, teacherId, token, onClose }: {
     } catch {
       setError("Could not reach the server. Try again.");
     } finally {
-      setLoading(false);
+      setLoading(null);
     }
   };
 
+  const expiry = issued
+    ? new Date(issued.expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : "";
+
   return (
-    <Modal visible={visible} transparent animationType="fade">
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.overlay} onPress={onClose} />
       <View style={[styles.modal, { gap: 12 }]}>
         <Text style={styles.modalTitle}>Reset Password</Text>
-        {done ? (
+        <Text style={styles.meta}>{teacher.firstName} {teacher.lastName} · @{teacher.username}</Text>
+        {issued ? (
+          <>
+            <View style={styles.codeBox}>
+              <Text style={styles.codeText}>{issued.code.slice(0, 3)} {issued.code.slice(3)}</Text>
+            </View>
+            <Text style={[styles.successHint, { textAlign: "left" }]}>
+              Tell {teacher.firstName} to open the app, tap "Forgot password?", and enter the username{" "}
+              <Text style={{ color: "#f0f0f0" }}>{teacher.username}</Text> with this code. It works once and
+              expires at {expiry}.
+            </Text>
+            <TouchableOpacity style={styles.createBtn} onPress={onClose}>
+              <Text style={styles.createBtnText}>Done</Text>
+            </TouchableOpacity>
+          </>
+        ) : done ? (
           <>
             <Feather name="check-circle" size={32} color="#42C97A" style={{ alignSelf: "center" }} />
             <Text style={[styles.modalLabel, { textAlign: "center" }]}>Password reset. Teacher must change it on next login.</Text>
-            <TouchableOpacity style={styles.createBtn} onPress={() => { setDone(false); setNewPassword(""); onClose(); }}>
+            <TouchableOpacity style={styles.createBtn} onPress={onClose}>
               <Text style={styles.createBtnText}>Done</Text>
             </TouchableOpacity>
           </>
         ) : (
           <>
-            <TextInput style={styles.modalInput} placeholder="New password" placeholderTextColor="#555" value={newPassword} onChangeText={setNewPassword} secureTextEntry />
-            {error && <Text style={styles.modalError}>{error}</Text>}
-            <TouchableOpacity style={[styles.createBtn, loading && { opacity: 0.5 }]} onPress={handleReset} disabled={loading}>
-              {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Reset Password</Text>}
+            <TouchableOpacity style={[styles.createBtn, loading && { opacity: 0.5 }]} onPress={handleCode} disabled={!!loading}>
+              {loading === "code" ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Give a Reset Code</Text>}
             </TouchableOpacity>
+            <Text style={[styles.modalLabel, { textAlign: "center", marginTop: 4 }]}>OR SET A TEMPORARY PASSWORD</Text>
+            <TextInput style={styles.modalInput} placeholder="Temporary password" placeholderTextColor="#555" value={newPassword} onChangeText={setNewPassword} secureTextEntry />
+            <TouchableOpacity style={[styles.secondaryBtn, loading && { opacity: 0.5 }]} onPress={handleReset} disabled={!!loading}>
+              {loading === "password" ? <ActivityIndicator color="#5B8AF5" /> : <Text style={styles.secondaryBtnText}>Set Temporary Password</Text>}
+            </TouchableOpacity>
+            {error && <Text style={styles.modalError}>{error}</Text>}
           </>
         )}
+      </View>
+    </Modal>
+  );
+}
+
+// Link an authenticator app to the signed-in admin's own account, so they can
+// reset their password with it if they forget it.
+function AuthenticatorModal({ token, onClose }: { token: string; onClose: () => void }) {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [setup, setSetup] = useState<{ secret: string; qr: string } | null>(null);
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/auth/authenticator`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((d) => setEnabled(d.enabled))
+      .catch(() => setError("Could not reach the server. Close and try again."));
+  }, [token]);
+
+  const post = async (path: string, body?: object) => {
+    setBusy(true); setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/auth/authenticator/${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(data.error ?? "Something went wrong"); return null; }
+      return data;
+    } catch {
+      setError("Could not reach the server. Try again.");
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const start = async () => {
+    const data = await post("setup");
+    if (data) { setSetup(data); setCode(""); }
+  };
+
+  const confirm = async () => {
+    const digits = code.replace(/\D/g, "");
+    if (digits.length !== 6) { setError("Enter the 6-digit code from the app"); return; }
+    if (await post("confirm", { code: digits })) { setSetup(null); setEnabled(true); }
+  };
+
+  const turnOff = () => {
+    Alert.alert("Turn off the authenticator?", "You will not be able to reset your own password with it until you set it up again.", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Turn off", style: "destructive", onPress: async () => { if (await post("disable")) setEnabled(false); } },
+    ]);
+  };
+
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.overlay} onPress={onClose} />
+      <View style={[styles.modal, { maxHeight: "92%" }]}>
+        <ScrollView contentContainerStyle={{ gap: 12 }} keyboardShouldPersistTaps="handled">
+          <Text style={styles.modalTitle}>Password Recovery</Text>
+          {enabled === null && !error ? (
+            <ActivityIndicator color="#5B8AF5" />
+          ) : setup ? (
+            <>
+              <Text style={[styles.successHint, { textAlign: "left" }]}>
+                1. Install Google Authenticator or Microsoft Authenticator on your phone.{"\n"}
+                2. In the app, tap "+" then "Scan a QR code" and scan this.
+              </Text>
+              <View style={styles.qrWrap}>
+                <Image source={{ uri: setup.qr }} style={styles.qr} />
+              </View>
+              <Text style={[styles.meta, { textAlign: "center" }]}>Can't scan? Choose "Enter a setup key" and type:</Text>
+              <Text selectable style={styles.secretText}>{setup.secret.match(/.{1,4}/g)?.join(" ")}</Text>
+              <Text style={[styles.successHint, { textAlign: "left" }]}>3. Enter the 6-digit code the app now shows:</Text>
+              <TextInput
+                style={[styles.modalInput, styles.codeInput]}
+                placeholder="123456"
+                placeholderTextColor="#555"
+                value={code}
+                onChangeText={setCode}
+                keyboardType="number-pad"
+                maxLength={7}
+              />
+              {error && <Text style={styles.modalError}>{error}</Text>}
+              <TouchableOpacity style={[styles.createBtn, busy && { opacity: 0.5 }]} onPress={confirm} disabled={busy}>
+                {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Confirm</Text>}
+              </TouchableOpacity>
+              <Text style={[styles.meta, { textAlign: "center" }]}>Keep this screen private: anyone who scans it can reset your password.</Text>
+            </>
+          ) : enabled ? (
+            <>
+              <Feather name="shield" size={32} color="#42C97A" style={{ alignSelf: "center" }} />
+              <Text style={styles.successHint}>
+                Your authenticator app is linked. If you forget your password, tap "Forgot password?" on the
+                sign-in screen and enter the code from the app.
+              </Text>
+              {error && <Text style={styles.modalError}>{error}</Text>}
+              <TouchableOpacity style={styles.createBtn} onPress={onClose}>
+                <Text style={styles.createBtnText}>Done</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.secondaryBtn} onPress={turnOff} disabled={busy}>
+                <Text style={[styles.secondaryBtnText, { color: "#ef4444" }]}>Turn off (e.g. to move to a new phone)</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <Text style={[styles.successHint, { textAlign: "left" }]}>
+                Link an authenticator app to your account. If you ever forget your password, the app gives you
+                a code to set a new one, with no email needed.{"\n\n"}
+                For teachers who forget their password, tap the key next to their name and give them a reset code.
+              </Text>
+              {error && <Text style={styles.modalError}>{error}</Text>}
+              {enabled === false && (
+                <TouchableOpacity style={[styles.createBtn, busy && { opacity: 0.5 }]} onPress={start} disabled={busy}>
+                  {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.createBtnText}>Set Up Authenticator</Text>}
+                </TouchableOpacity>
+              )}
+            </>
+          )}
+        </ScrollView>
       </View>
     </Modal>
   );
@@ -340,5 +514,13 @@ const styles = StyleSheet.create({
   idPillText: { fontSize: 20, fontFamily: "Inter_700Bold", color: "#5B8AF5" },
   successHint: { fontSize: 13, fontFamily: "Inter_400Regular", color: "#8B949E", textAlign: "center" },
   doneBtn: { backgroundColor: "#42C97A22", borderRadius: 12, paddingVertical: 12, paddingHorizontal: 32, borderWidth: 1, borderColor: "#42C97A" },
+  secondaryBtn: { borderRadius: 12, paddingVertical: 12, alignItems: "center", borderWidth: 1, borderColor: "#30363D" },
+  secondaryBtnText: { fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#5B8AF5" },
+  codeBox: { alignSelf: "center", backgroundColor: "#5B8AF522", borderRadius: 14, borderWidth: 1, borderColor: "#5B8AF5", paddingHorizontal: 28, paddingVertical: 14 },
+  codeText: { fontSize: 36, fontFamily: "Inter_700Bold", color: "#f0f0f0", letterSpacing: 6 },
+  codeInput: { fontFamily: "Inter_700Bold", fontSize: 20, letterSpacing: 6, textAlign: "center" },
+  qrWrap: { alignSelf: "center", backgroundColor: "#fff", borderRadius: 12, padding: 8 },
+  qr: { width: 220, height: 220 },
+  secretText: { textAlign: "center", fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#f0f0f0", letterSpacing: 1 },
   doneBtnText: { fontSize: 15, fontFamily: "Inter_700Bold", color: "#42C97A" },
 });

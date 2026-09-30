@@ -18,9 +18,10 @@ const schoolLogo = require("@/assets/images/school-logo.png");
 
 interface Props {
   onLogin: (username: string, password: string) => Promise<string | null>;
+  onRecover: (username: string, code: string, newPassword: string) => Promise<string | null>;
 }
 
-export function LoginScreen({ onLogin }: Props) {
+export function LoginScreen({ onLogin, onRecover }: Props) {
   const insets = useSafeAreaInsets();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -28,6 +29,34 @@ export function LoginScreen({ onLogin }: Props) {
   const [loading, setLoading] = useState(false);
   const [slowServer, setSlowServer] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [forgot, setForgot] = useState(false);
+  const [code, setCode] = useState("");
+  const [confirm, setConfirm] = useState("");
+
+  const switchMode = (toForgot: boolean) => {
+    setForgot(toForgot);
+    setError(null);
+    setPassword("");
+    setConfirm("");
+    setCode("");
+  };
+
+  const handleRecover = async () => {
+    const digits = code.replace(/\D/g, "");
+    if (!username.trim()) { setError("Enter your username"); return; }
+    if (digits.length !== 6) { setError("Enter the 6-digit code"); return; }
+    if (password.trim().length < 4) { setError("New password must be at least 4 characters"); return; }
+    if (password !== confirm) { setError("Passwords do not match"); return; }
+    setLoading(true);
+    setError(null);
+    setSlowServer(false);
+    const slowTimer = setTimeout(() => setSlowServer(true), 5000);
+    const err = await onRecover(username.trim(), digits, password.trim());
+    clearTimeout(slowTimer);
+    setLoading(false);
+    setSlowServer(false);
+    if (err) setError(err);
+  };
 
   const handleLogin = async () => {
     if (!username.trim()) { setError("Enter your username"); return; }
@@ -58,7 +87,9 @@ export function LoginScreen({ onLogin }: Props) {
         <Image source={schoolLogo} style={styles.logo} resizeMode="contain" />
 
         <Text style={styles.title}>Rafiki Games</Text>
-        <Text style={styles.subtitle}>Sign in to award virtue points</Text>
+        <Text style={styles.subtitle}>
+          {forgot ? "Reset your password" : "Sign in to award virtue points"}
+        </Text>
 
         <View style={styles.card}>
           <View style={styles.field}>
@@ -78,25 +109,68 @@ export function LoginScreen({ onLogin }: Props) {
             </View>
           </View>
 
+          {forgot && (
+            <>
+              <Text style={styles.help}>
+                Teachers: ask an admin to give you a reset code.{"\n"}
+                Admins: use the 6-digit code in your authenticator app.
+              </Text>
+              <View style={styles.field}>
+                <Text style={styles.label}>Code</Text>
+                <View style={styles.inputWrap}>
+                  <Feather name="hash" size={16} color="#8B949E" />
+                  <TextInput
+                    style={[styles.input, styles.codeInput]}
+                    placeholder="123456"
+                    placeholderTextColor="#555"
+                    value={code}
+                    onChangeText={setCode}
+                    keyboardType="number-pad"
+                    maxLength={7}
+                  />
+                </View>
+              </View>
+            </>
+          )}
+
           <View style={styles.field}>
-            <Text style={styles.label}>Password</Text>
+            <Text style={styles.label}>{forgot ? "New password" : "Password"}</Text>
             <View style={styles.inputWrap}>
               <Feather name="lock" size={16} color="#8B949E" />
               <TextInput
                 style={styles.input}
-                placeholder="Your password"
+                placeholder={forgot ? "At least 4 characters" : "Your password"}
                 placeholderTextColor="#555"
                 value={password}
                 onChangeText={setPassword}
                 secureTextEntry={!showPassword}
-                returnKeyType="done"
-                onSubmitEditing={handleLogin}
+                returnKeyType={forgot ? "next" : "done"}
+                onSubmitEditing={forgot ? undefined : handleLogin}
               />
               <TouchableOpacity onPress={() => setShowPassword((v) => !v)}>
                 <Feather name={showPassword ? "eye-off" : "eye"} size={16} color="#8B949E" />
               </TouchableOpacity>
             </View>
           </View>
+
+          {forgot && (
+            <View style={styles.field}>
+              <Text style={styles.label}>Confirm new password</Text>
+              <View style={styles.inputWrap}>
+                <Feather name="lock" size={16} color="#8B949E" />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Type it again"
+                  placeholderTextColor="#555"
+                  value={confirm}
+                  onChangeText={setConfirm}
+                  secureTextEntry={!showPassword}
+                  returnKeyType="done"
+                  onSubmitEditing={handleRecover}
+                />
+              </View>
+            </View>
+          )}
 
           {error && (
             <View style={styles.errorBox}>
@@ -107,7 +181,7 @@ export function LoginScreen({ onLogin }: Props) {
 
           <TouchableOpacity
             style={[styles.loginBtn, loading && styles.loginBtnDisabled]}
-            onPress={handleLogin}
+            onPress={forgot ? handleRecover : handleLogin}
             disabled={loading}
             activeOpacity={0.8}
           >
@@ -115,16 +189,19 @@ export function LoginScreen({ onLogin }: Props) {
               <View style={styles.loadingRow}>
                 <ActivityIndicator color="#fff" size="small" />
                 <Text style={styles.loginBtnText}>
-                  {slowServer ? "Waking up server..." : "Signing in..."}
+                  {slowServer ? "Waking up server..." : forgot ? "Resetting..." : "Signing in..."}
                 </Text>
               </View>
             ) : (
-              <Text style={styles.loginBtnText}>Sign In</Text>
+              <Text style={styles.loginBtnText}>{forgot ? "Reset Password & Sign In" : "Sign In"}</Text>
             )}
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.hint}>Contact admin if you forgot your username or password</Text>
+        <TouchableOpacity onPress={() => switchMode(!forgot)} disabled={loading}>
+          <Text style={styles.forgotLink}>{forgot ? "Back to sign in" : "Forgot password?"}</Text>
+        </TouchableOpacity>
+        <Text style={styles.hint}>Forgot your username? Ask an admin.</Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -147,5 +224,8 @@ const styles = StyleSheet.create({
   loginBtnDisabled: { opacity: 0.7 },
   loginBtnText: { fontSize: 16, fontFamily: "Inter_700Bold", color: "#fff", letterSpacing: 0.3 },
   loadingRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  hint: { marginTop: 24, fontSize: 12, fontFamily: "Inter_400Regular", color: "#8B949E66", textAlign: "center" },
+  help: { fontSize: 13, fontFamily: "Inter_400Regular", color: "#8B949E", lineHeight: 19 },
+  codeInput: { fontFamily: "Inter_700Bold", letterSpacing: 4, fontSize: 18 },
+  forgotLink: { marginTop: 20, fontSize: 14, fontFamily: "Inter_600SemiBold", color: "#5B8AF5", padding: 6 },
+  hint: { marginTop: 8, fontSize: 12, fontFamily: "Inter_400Regular", color: "#8B949E66", textAlign: "center" },
 });

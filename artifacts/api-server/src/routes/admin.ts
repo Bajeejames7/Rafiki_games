@@ -4,6 +4,7 @@ import { eq, desc } from "drizzle-orm";
 import { z } from "zod";
 import { db, teachersTable, pointEventsTable, BLOCKS } from "@workspace/db";
 import { currentTeacher, requireAdmin } from "../lib/auth";
+import { RESET_CODE_TTL, newResetCode } from "../lib/recovery";
 
 const router: IRouter = Router();
 
@@ -101,6 +102,29 @@ router.put("/admin/teachers/:id/reset-password", requireAdmin, async (req, res):
     return;
   }
   res.json({ ok: true });
+});
+
+// Issue a one-time reset code for a teacher who forgot their password. The
+// admin reads it out; the teacher enters it under "Forgot password?" and
+// chooses a new password. A new code replaces any earlier one.
+router.post("/admin/teachers/:id/reset-code", requireAdmin, async (req, res): Promise<void> => {
+  const id = idParam(req.params.id);
+  if (id === null) {
+    res.status(400).json({ error: "Invalid teacher" });
+    return;
+  }
+  const code = newResetCode();
+  const expiresAt = new Date(Date.now() + RESET_CODE_TTL);
+  const updated = await db.update(teachersTable)
+    .set({ resetCodeHash: await bcrypt.hash(code, 10), resetCodeExpires: expiresAt })
+    .where(eq(teachersTable.id, id))
+    .returning({ username: teachersTable.username });
+  if (updated.length === 0) {
+    res.status(404).json({ error: "Teacher not found" });
+    return;
+  }
+  req.log.info({ teacherId: id, by: currentTeacher(req).id }, "Reset code issued");
+  res.json({ code, username: updated[0].username, expiresAt: expiresAt.toISOString() });
 });
 
 // Delete teacher. Their point history stays: the log keeps the name and class

@@ -32,6 +32,17 @@ export async function runMigrations() {
       ON "point_events" ("client_event_id");
     `);
 
+    // Migration 0003: password recovery (admin-issued reset codes and an
+    // authenticator app for admins).
+    await client.query(`
+      ALTER TABLE "teachers"
+        ADD COLUMN IF NOT EXISTS "reset_code_hash" text,
+        ADD COLUMN IF NOT EXISTS "reset_code_expires" timestamp with time zone,
+        ADD COLUMN IF NOT EXISTS "totp_secret" text,
+        ADD COLUMN IF NOT EXISTS "totp_enabled" boolean DEFAULT false NOT NULL,
+        ADD COLUMN IF NOT EXISTS "totp_last_step" integer;
+    `);
+
     console.log("[Migration] ✓ Database migrations completed");
   } catch (err) {
     console.error("[Migration] ✗ Migration failed:", err);
