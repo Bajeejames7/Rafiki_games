@@ -51667,7 +51667,7 @@ function createApp(webDir) {
         index: false,
         maxAge: "1h",
         setHeaders: (res, file2) => {
-          if (/\.(html|webmanifest|json)$/.test(file2)) noCache(res);
+          if (/\.(html|webmanifest|json)$/.test(file2) || file2.endsWith("sw.js")) noCache(res);
         }
       })
     );
