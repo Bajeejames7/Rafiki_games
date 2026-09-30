@@ -51644,8 +51644,18 @@ function createApp(webDir) {
     next();
   }, api);
   if (webDir && existsSync(webDir)) {
-    app.use(import_express6.default.static(webDir, { index: false, maxAge: "1h" }));
+    const noCache = (res) => res.setHeader("Cache-Control", "no-cache");
+    app.use(
+      import_express6.default.static(webDir, {
+        index: false,
+        maxAge: "1h",
+        setHeaders: (res, file2) => {
+          if (file2.endsWith(".html") || file2.endsWith(".webmanifest")) noCache(res);
+        }
+      })
+    );
     app.get(/^\/(?!api\/).*/, (_req, res) => {
+      noCache(res);
       res.sendFile(path.join(webDir, "index.html"));
     });
   }
