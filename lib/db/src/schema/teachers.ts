@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, boolean } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, boolean, integer } from "drizzle-orm/pg-core";
 import { z } from "zod";
 
 export const teachersTable = pgTable("teachers", {
@@ -10,6 +10,15 @@ export const teachersTable = pgTable("teachers", {
   passwordHash: text("password_hash").notNull(),
   role: text("role").notNull().default("teacher"), // "admin" | "teacher"
   mustChangePassword: boolean("must_change_password").notNull().default(true),
+  // Password recovery. An admin gives a teacher a one-time reset code
+  // (stored hashed, expires quickly); admins can also recover with an
+  // authenticator app. totp_secret is only trusted once totp_enabled is set,
+  // and totp_last_step stops the same 6-digit code being used twice.
+  resetCodeHash: text("reset_code_hash"),
+  resetCodeExpires: timestamp("reset_code_expires", { withTimezone: true }),
+  totpSecret: text("totp_secret"),
+  totpEnabled: boolean("totp_enabled").notNull().default(false),
+  totpLastStep: integer("totp_last_step"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

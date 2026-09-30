@@ -115,6 +115,35 @@ export function useAuth() {
     }
   }, []);
 
+  // Forgot password: a reset code from an admin, or (admins only) the code
+  // from their authenticator app. On success the user is signed in.
+  const recover = useCallback(async (username: string, code: string, newPassword: string): Promise<string | null> => {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 70000); // server may be waking up
+      const res = await fetch(`${API_BASE}/auth/recover`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, code, newPassword }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        return err.error ?? "Could not reset the password";
+      }
+      const { token: t, teacher: tch } = await res.json();
+      setToken(t);
+      setTeacher(tch);
+      await AsyncStorage.setItem(TOKEN_KEY, t);
+      await AsyncStorage.setItem(TEACHER_KEY, JSON.stringify(tch));
+      return null;
+    } catch (err: any) {
+      if (err.name === "AbortError") return "Server is taking too long. Try again in a minute.";
+      return "Network error. Check your internet connection.";
+    }
+  }, []);
+
   const logout = useCallback(async () => {
     if (token) {
       fetch(`${API_BASE}/auth/logout`, {
@@ -175,5 +204,5 @@ export function useAuth() {
     }
   }, [token]);
 
-  return { token, teacher, loading, login, logout, changePassword };
+  return { token, teacher, loading, login, recover, logout, changePassword };
 }

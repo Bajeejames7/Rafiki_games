@@ -1574,7 +1574,7 @@ function appendOlder(loaded: LogEntry[], older: LogEntry[]): LogEntry[] {
 }
 
 export default function HomeScreen() {
-  const { token, teacher, loading: authLoading, login, logout, changePassword } = useAuth();
+  const { token, teacher, loading: authLoading, login, recover, logout, changePassword } = useAuth();
   const [showAdmin, setShowAdmin] = useState(false);
 
   const [scores, setScores] = useState<Scores>({
@@ -1685,7 +1685,7 @@ export default function HomeScreen() {
 
   // Show auth screens before main app
   if (authLoading) return null;
-  if (!token || !teacher) return <LoginScreen onLogin={login} />;
+  if (!token || !teacher) return <LoginScreen onLogin={login} onRecover={recover} />;
   if (teacher.mustChangePassword) {
     return (
       <ChangePasswordScreen
