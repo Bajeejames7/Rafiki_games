@@ -108,7 +108,7 @@ export function AdminPanel({ token, onClose }: Props) {
                 <View style={styles.idBadge}>
                   <Text style={styles.idText}>@{t.username}</Text>
                 </View>
-                <View>
+                <View style={{ flex: 1, paddingRight: 8 }}>
                   <Text style={styles.name}>{t.firstName} {t.lastName}</Text>
                   <Text style={styles.meta}>
                     {t.block.toUpperCase()} · {t.role}
