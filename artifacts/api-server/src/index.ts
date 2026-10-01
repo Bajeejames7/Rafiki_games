@@ -3,6 +3,7 @@ import { logger } from "./lib/logger";
 import { runMigrations } from "./lib/migrate";
 import { pool } from "@workspace/db";
 import { mountInterschool } from "./lib/interschool";
+import { mountKienyeji } from "./lib/kienyeji";
 
 const rawPort = process.env["PORT"];
 
@@ -18,9 +19,14 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
+let kienyejiPing: (() => Promise<unknown>) | null = null;
+
 // Run migrations before starting server
 runMigrations()
   .then(() => mountInterschool(app))
+  .then(async () => {
+    kienyejiPing = await mountKienyeji(app);
+  })
   .then(() => {
     app.listen(port, (err) => {
       if (err) {
@@ -53,6 +59,14 @@ runMigrations()
             logger.info("DB keep-alive ping OK");
           } catch (err) {
             logger.warn({ err }, "DB keep-alive ping failed");
+          }
+
+          if (kienyejiPing) {
+            try {
+              await kienyejiPing();
+            } catch (err) {
+              logger.warn({ err }, "Kienyeji DB keep-alive ping failed");
+            }
           }
         }, TEN_MINUTES);
 
