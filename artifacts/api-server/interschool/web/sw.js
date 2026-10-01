@@ -4,8 +4,8 @@
 // filled in by vite.config.ts. Data (/api) is never cached here — the app
 // keeps its own saved copy of that (see web/src/lib/offline.ts).
 
-const CACHE = "ambassadors-muopltm4";
-const FILES = ["index.html","assets/index-CzuWG2tI.js","assets/index-BYa6rGNA.css","logo.jpg","hero.jpg","manifest.webmanifest","logos/rafiki.png","logos/daniels.png","logos/icc-imara.png","logos/rosslyn.png","backgrounds/cover.jpg","backgrounds/rafiki.jpg","backgrounds/daniels.jpg","backgrounds/icc-imara.jpg","backgrounds/rosslyn.jpg"];
+const CACHE = "ambassadors-muq5llfq";
+const FILES = ["index.html","assets/index-dwpE-dT4.js","assets/index-BYa6rGNA.css","logo.jpg","hero.jpg","manifest.webmanifest","logos/rafiki.png","logos/daniels.png","logos/icc-imara.png","logos/rosslyn.png","backgrounds/cover.jpg","backgrounds/rafiki.jpg","backgrounds/daniels.jpg","backgrounds/icc-imara.jpg","backgrounds/rosslyn.jpg"];
 const SHELL = "index.html";
 const NAVIGATION_TIMEOUT_MS = 4000;
 

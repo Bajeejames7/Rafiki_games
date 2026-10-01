@@ -51300,6 +51300,12 @@ programRoutes.patch("/programs/:slug", async (req, res) => {
   }
   res.json(present(await findProgram(p.slug)));
 });
+programRoutes.delete("/programs/:slug", async (req, res) => {
+  requireAdmin(me(req));
+  const p = await findProgram(req.params.slug);
+  await query("DELETE FROM programs WHERE id = $1", [p.id]);
+  res.json({ ok: true });
+});
 var Coordinators = external_exports.object({ userIds: external_exports.array(external_exports.number().int().positive()).max(20) });
 programRoutes.put("/programs/:slug/coordinators", async (req, res) => {
   requireAdmin(me(req));
