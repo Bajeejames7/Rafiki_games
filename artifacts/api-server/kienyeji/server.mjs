@@ -31164,6 +31164,48 @@ var checkPassword = (pw, hash2) => bcryptjs_default.compare(pw, hash2);
 function newResetCode() {
   return String(randomInt(0, 1e8)).padStart(8, "0");
 }
+var B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+function newTotpSecret() {
+  const bytes = randomBytes2(20);
+  let bits = "";
+  for (const b of bytes) bits += b.toString(2).padStart(8, "0");
+  let out = "";
+  for (let i = 0; i + 5 <= bits.length; i += 5) out += B32[parseInt(bits.slice(i, i + 5), 2)];
+  return out;
+}
+function base32Decode(s) {
+  let bits = "";
+  for (const c of s.replace(/=+$/, "").toUpperCase()) {
+    const v = B32.indexOf(c);
+    if (v === -1) throw new Error("Invalid base32");
+    bits += v.toString(2).padStart(5, "0");
+  }
+  const out = [];
+  for (let i = 0; i + 8 <= bits.length; i += 8) out.push(parseInt(bits.slice(i, i + 8), 2));
+  return Buffer.from(out);
+}
+function totpAt(secret, counter) {
+  const msg = Buffer.alloc(8);
+  msg.writeBigUInt64BE(BigInt(counter));
+  const h = createHmac("sha1", base32Decode(secret)).update(msg).digest();
+  const offset = h[h.length - 1] & 15;
+  const n = (h[offset] & 127) << 24 | h[offset + 1] << 16 | h[offset + 2] << 8 | h[offset + 3];
+  return String(n % 1e6).padStart(6, "0");
+}
+var totpCounter = (now = Date.now()) => Math.floor(now / 3e4);
+function checkTotp(secret, code, now = Date.now()) {
+  if (!/^\d{6}$/.test(code)) return null;
+  const c = totpCounter(now);
+  for (const step of [c, c - 1, c + 1]) {
+    const expected = Buffer.from(totpAt(secret, step));
+    if (timingSafeEqual(expected, Buffer.from(code))) return step;
+  }
+  return null;
+}
+function totpUri(secret, email) {
+  const label = encodeURIComponent(`Kienyeji Orders:${email}`);
+  return `otpauth://totp/${label}?secret=${secret}&issuer=${encodeURIComponent("Kienyeji Orders")}&algorithm=SHA1&digits=6&period=30`;
+}
 
 // src/db.ts
 async function migrate(db) {
@@ -31179,6 +31221,15 @@ async function migrate(db) {
       reset_expires TIMESTAMPTZ,
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     )`);
+  for (const col of [
+    "totp_secret TEXT",
+    "totp_pending TEXT",
+    "totp_last_step BIGINT",
+    "reset_fails INTEGER NOT NULL DEFAULT 0",
+    "reset_locked_until TIMESTAMPTZ"
+  ]) {
+    await db.query(`ALTER TABLE kf_staff ADD COLUMN IF NOT EXISTS ${col}`);
+  }
   await db.query(`
     CREATE TABLE IF NOT EXISTS kf_devices (
       token      TEXT PRIMARY KEY,
@@ -31276,8 +31327,11 @@ var staffJson = (s) => ({
   name: s.name,
   email: s.email,
   role: s.role,
-  devices: Number(s.devices ?? 0)
+  devices: Number(s.devices ?? 0),
+  hasAuthenticator: !!s.totp_secret
 });
+var MAX_RESET_FAILS = 5;
+var RESET_LOCK_MINUTES = 15;
 function orderInput(body, allowPriceOverride) {
   const product = PRODUCTS.find((p) => p.orderType === body?.orderType);
   if (!product) throw bad("Unknown product");
@@ -31458,17 +31512,81 @@ ${o.deliveryLocation} \xB7 ${o.deliveryDate}`,
     const code = str(req.body?.code, "code", 20).replace(/\D/g, "");
     const password = typeof req.body?.password === "string" ? req.body.password : "";
     if (password.length < 6) throw bad("Use a password of at least 6 characters.");
+    const wrong = bad("That code is wrong or has expired.");
     const { rows } = await db.query("SELECT * FROM kf_staff WHERE email = $1", [email]);
     const me = rows[0];
-    const valid = me?.reset_hash && me.reset_expires && new Date(me.reset_expires).getTime() > Date.now() && createHash("sha256").update(code).digest("hex") === me.reset_hash;
-    if (!valid || !me) throw bad("That code is wrong or has expired. Ask the admin for a new one.");
+    if (!me) throw wrong;
+    if (me.reset_locked_until && new Date(me.reset_locked_until).getTime() > Date.now()) {
+      throw new HttpError(429, `Too many wrong codes. Try again in ${RESET_LOCK_MINUTES} minutes.`);
+    }
+    let totpStep = null;
+    let valid = false;
+    if (code.length === 6 && me.totp_secret) {
+      totpStep = checkTotp(me.totp_secret, code);
+      valid = totpStep !== null && (me.totp_last_step === null || totpStep > Number(me.totp_last_step));
+    } else if (code.length === 8) {
+      valid = !!me.reset_hash && !!me.reset_expires && new Date(me.reset_expires).getTime() > Date.now() && createHash("sha256").update(code).digest("hex") === me.reset_hash;
+    }
+    if (!valid) {
+      await db.query(
+        `UPDATE kf_staff SET reset_fails = reset_fails + 1,
+           reset_locked_until = CASE WHEN reset_fails + 1 >= $2 THEN now() + make_interval(mins => $3) ELSE reset_locked_until END
+         WHERE id = $1`,
+        [me.id, MAX_RESET_FAILS, RESET_LOCK_MINUTES]
+      );
+      throw wrong;
+    }
     const updated = await db.query(
-      `UPDATE kf_staff SET password_hash = $2, token_version = token_version + 1, reset_hash = NULL, reset_expires = NULL
+      `UPDATE kf_staff SET password_hash = $2, token_version = token_version + 1,
+         reset_hash = CASE WHEN $3::bigint IS NULL THEN NULL ELSE reset_hash END,
+         reset_expires = CASE WHEN $3::bigint IS NULL THEN NULL ELSE reset_expires END,
+         totp_last_step = COALESCE($3::bigint, totp_last_step),
+         reset_fails = 0, reset_locked_until = NULL
        WHERE id = $1 RETURNING *`,
-      [me.id, await hashPassword(password)]
+      [me.id, await hashPassword(password), totpStep]
     );
     const fresh = updated.rows[0];
     res.json({ token: tokens.issue(fresh.id, fresh.token_version), me: staffJson(fresh) });
+  }));
+  app.post("/api/me/password", wrap(async (req, res) => {
+    const me = await staffFrom(req);
+    const current = typeof req.body?.current === "string" ? req.body.current : "";
+    const next = typeof req.body?.next === "string" ? req.body.next : "";
+    if (!await checkPassword(current, me.password_hash)) throw bad("Your current password is wrong.");
+    if (next.length < 6) throw bad("Use a password of at least 6 characters.");
+    const { rows } = await db.query(
+      "UPDATE kf_staff SET password_hash = $2, token_version = token_version + 1 WHERE id = $1 RETURNING *",
+      [me.id, await hashPassword(next)]
+    );
+    res.json({ token: tokens.issue(rows[0].id, rows[0].token_version), me: staffJson(rows[0]) });
+  }));
+  app.post("/api/me/authenticator/start", wrap(async (req, res) => {
+    const me = await staffFrom(req);
+    const secret = newTotpSecret();
+    await db.query("UPDATE kf_staff SET totp_pending = $2 WHERE id = $1", [me.id, secret]);
+    res.json({ secret, uri: totpUri(secret, me.email) });
+  }));
+  app.post("/api/me/authenticator/confirm", wrap(async (req, res) => {
+    const me = await staffFrom(req);
+    const code = str(req.body?.code, "code", 10).replace(/\D/g, "");
+    if (!me.totp_pending) throw bad("Start the setup again.");
+    const step = checkTotp(me.totp_pending, code);
+    if (step === null) throw bad("That code doesn\u2019t match. Check the 6 digits under \u201CKienyeji Orders\u201D and try again.");
+    const { rows } = await db.query(
+      "UPDATE kf_staff SET totp_secret = totp_pending, totp_pending = NULL, totp_last_step = $2 WHERE id = $1 RETURNING *",
+      [me.id, step]
+    );
+    res.json({ me: staffJson(rows[0]) });
+  }));
+  app.post("/api/me/authenticator/remove", wrap(async (req, res) => {
+    const me = await staffFrom(req);
+    const password = typeof req.body?.password === "string" ? req.body.password : "";
+    if (!await checkPassword(password, me.password_hash)) throw bad("Your password is wrong.");
+    const { rows } = await db.query(
+      "UPDATE kf_staff SET totp_secret = NULL, totp_pending = NULL, totp_last_step = NULL WHERE id = $1 RETURNING *",
+      [me.id]
+    );
+    res.json({ me: staffJson(rows[0]) });
   }));
   app.get("/api/me", wrap(async (req, res) => {
     res.json({ me: staffJson(await staffFrom(req)) });
