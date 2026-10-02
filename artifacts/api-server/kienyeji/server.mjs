@@ -29398,7 +29398,7 @@ var PRODUCTS = [
   { orderType: "live-broiler", name: "Live Broiler Chicken", unit: "birds", price: 500 },
   { orderType: "cleaned-broiler", name: "Slaughtered & Cleaned Broiler", unit: "birds", price: 450, perKg: true },
   { orderType: "bulk-broiler", name: "Bulk Broiler Order", unit: "birds", price: 400, perKg: true },
-  { orderType: "eggs-broiler", name: "Broiler Layers Eggs", unit: "trays", price: 400 }
+  { orderType: "eggs-broiler", name: "Broiler Layers Eggs", unit: "trays", price: 450 }
 ];
 function totalFor(p, qty) {
   return Math.round(p.perKg ? qty * AVG_BROILER_KG * p.price : qty * p.price);
