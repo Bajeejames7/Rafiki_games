@@ -51592,7 +51592,7 @@ var NewPerson = external_exports.object({
   role: external_exports.enum(["user", "admin"]).default("user")
 });
 userRoutes.post("/users", async (req, res) => {
-  requireSuperAdmin(me(req));
+  requireAdmin(me(req));
   const body = NewPerson.parse(req.body);
   const created = await one(
     `INSERT INTO users (email, name, password_hash, role, must_change_password)
