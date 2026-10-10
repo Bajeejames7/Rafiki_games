@@ -1120,7 +1120,7 @@ function TeamCard({
   score: number;
   rank: number;
   onAdd: (amount: number) => void;
-  onSubtract: () => void;
+  onSubtract: (amount: number) => void;
   /** Admins only; without it the card has no long-press action. */
   onReset?: () => void;
 }) {
@@ -1184,7 +1184,10 @@ function TeamCard({
         </View>
 
         <View style={styles.cardActions}>
-          <ScoreButton label="−50" onPress={onSubtract} color={colors.light.destructive} small />
+          <View style={styles.addButtons}>
+            <ScoreButton label="−1" onPress={() => onSubtract(1)} color={colors.light.destructive} small />
+            <ScoreButton label="−50" onPress={() => onSubtract(50)} color={colors.light.destructive} small />
+          </View>
           <View style={styles.addButtons}>
             <ScoreButton label="+50" onPress={() => handleAdd(50)} color={tc.primary} small />
             <ScoreButton label="+100" onPress={() => handleAdd(100)} color={tc.primary} small />
@@ -1703,7 +1706,7 @@ export default function HomeScreen() {
     if (fresh.length > 0) setLog((prev) => mergeNewestPage(fresh, prev));
   };
 
-  // +50/+100/+200 and −50 all go through here.
+  // +50/+100/+200, −1 and −50 all go through here.
   const award = async (teamId: string, requested: number) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const team = TEAMS.find((t) => t.id === teamId);
@@ -1933,7 +1936,7 @@ export default function HomeScreen() {
             score={scores[team.id] ?? 0}
             rank={idx}
             onAdd={(amount) => award(team.id, amount)}
-            onSubtract={() => award(team.id, -50)}
+            onSubtract={(amount) => award(team.id, -amount)}
             onReset={isAdmin ? () => handleResetTeam(team.id, team.name) : undefined}
           />
         ))}
@@ -2087,7 +2090,7 @@ const styles = StyleSheet.create({
   },
   addButtons: {
     flexDirection: "row",
-    gap: 8,
+    gap: 6,
   },
   scoreBtn: {
     borderRadius: 10,
@@ -2098,7 +2101,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   scoreBtnSmall: {
-    paddingHorizontal: 14,
+    paddingHorizontal: 11,
     paddingVertical: 10,
   },
   scoreBtnText: {
