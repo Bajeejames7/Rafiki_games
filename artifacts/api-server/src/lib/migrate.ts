@@ -1,7 +1,13 @@
 import { pool } from "@workspace/db";
 
 export async function runMigrations() {
-  const client = await pool.connect();
+  let client;
+  try {
+    client = await pool.connect();
+  } catch (err) {
+    console.error("[Migration] ✗ Cannot connect to the database:", err);
+    throw err;
+  }
   try {
     console.log("[Migration] Running database migrations...");
     

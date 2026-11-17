@@ -21,8 +21,30 @@ if (Number.isNaN(port) || port <= 0) {
 
 let kienyejiPing: (() => Promise<unknown>) | null = null;
 
-// Run migrations before starting server
-runMigrations()
+// Run migrations, but don't let an unreachable Rafiki database stop the
+// server: /interschool and /kienyeji have their own databases and should stay
+// up. Rafiki's routes return errors until its database is back; migrations are
+// retried every minute until they succeed.
+async function migrateOrRetry() {
+  try {
+    await runMigrations();
+  } catch {
+    console.error(
+      "[Startup] Rafiki database unavailable; starting anyway and retrying migrations every 60s",
+    );
+    const timer = setInterval(async () => {
+      try {
+        await runMigrations();
+        clearInterval(timer);
+        console.log("[Startup] Rafiki database is back; migrations done");
+      } catch {
+        // runMigrations already logged the reason
+      }
+    }, 60 * 1000);
+  }
+}
+
+migrateOrRetry()
   .then(() => mountInterschool(app))
   .then(async () => {
     kienyejiPing = await mountKienyeji(app);
@@ -76,6 +98,7 @@ runMigrations()
     });
   })
   .catch((err) => {
-    logger.error({ err }, "Failed to run migrations");
+    // console.error is synchronous; a pino line can be lost when we exit.
+    console.error("[Startup] Failed to start:", err);
     process.exit(1);
   });

@@ -22,6 +22,13 @@ const needsSsl = connectionString.includes("sslmode=require") ||
 const ssl = needsSsl ? { rejectUnauthorized: false } : undefined;
 
 export const pool = new Pool({ connectionString: cleanConnectionString, ssl });
+
+// An idle client losing its connection (e.g. Aiven powering off or restarting)
+// emits "error" on the pool. With no listener Node treats it as unhandled and
+// the whole server exits, so log it instead; the pool replaces the client.
+pool.on("error", (err) => {
+  console.error("[DB] Idle client error:", err.message);
+});
 export const db = drizzle(pool, { schema });
 
 export * from "./schema";
