@@ -26,23 +26,44 @@ export async function mountKienyeji(app: Express): Promise<(() => Promise<unknow
     logger.warn({ bundle }, "Kienyeji bundle missing; not mounted");
     return null;
   }
-  try {
-    const { createKienyejiServer } = await import(pathToFileURL(bundle).href);
-    // Never hold up Rafiki's start for more than 30s (e.g. its database asleep).
-    const kienyeji = await Promise.race([
-      createKienyejiServer({
-        databaseUrl,
-        tokenSecret: process.env["KIENYEJI_TOKEN_SECRET"],
-        fcmServiceAccount: process.env["KIENYEJI_FCM_SERVICE_ACCOUNT"],
-        log: (msg: string, extra?: unknown) => logger.info({ extra }, `kienyeji: ${msg}`),
-      }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timed out after 30s")), 30000).unref()),
-    ]);
-    app.use("/kienyeji", kienyeji.app);
-    logger.info("Kienyeji orders mounted at /kienyeji");
-    return kienyeji.ping;
-  } catch (err) {
-    logger.error({ err }, "Kienyeji orders failed to start; Rafiki Games continues without it");
-    return null;
+  // The route is mounted straight away and forwards to the app once it has
+  // started. If its database is unreachable at boot, it answers 503 and the
+  // start is retried every minute instead of staying down until a redeploy.
+  let started: { app: Express; ping: () => Promise<unknown> } | null = null;
+  app.use("/kienyeji", (req, res, next) => {
+    if (started) return started.app(req, res, next);
+    res.status(503).json({ error: "Kienyeji orders is starting; try again in a minute" });
+  });
+
+  const tryStart = async () => {
+    try {
+      const { createKienyejiServer } = await import(pathToFileURL(bundle).href);
+      // Never hold up Rafiki's start for more than 30s (e.g. its database asleep).
+      started = await Promise.race([
+        createKienyejiServer({
+          databaseUrl,
+          tokenSecret: process.env["KIENYEJI_TOKEN_SECRET"],
+          fcmServiceAccount: process.env["KIENYEJI_FCM_SERVICE_ACCOUNT"],
+          log: (msg: string, extra?: unknown) => logger.info({ extra }, `kienyeji: ${msg}`),
+        }),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timed out after 30s")), 30000).unref()),
+      ]);
+      logger.info("Kienyeji orders mounted at /kienyeji");
+      return true;
+    } catch (err) {
+      console.error("[Kienyeji] failed to start; retrying every 60s:", err);
+      return false;
+    }
+  };
+
+  if (!(await tryStart())) {
+    let busy = false;
+    const timer = setInterval(async () => {
+      if (busy) return;
+      busy = true;
+      if (await tryStart()) clearInterval(timer);
+      busy = false;
+    }, 60 * 1000);
   }
+  return () => (started ? started.ping() : Promise.resolve());
 }
