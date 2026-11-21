@@ -26,13 +26,14 @@ app.use(
   }),
 );
 app.use(cors());
-// Rafiki's own routes take small bodies (the 100kb default). The interschool
-// app mounted at /interschool parses its own, with room for uploaded logos and
-// photos, so its requests pass through untouched here.
+// Rafiki's own routes take small bodies (the 100kb default). The apps mounted
+// at /interschool and /ambassadors parse their own (room for uploaded logos,
+// photos and offline sync batches), so their requests pass through untouched here.
 const jsonBody = express.json();
 const formBody = express.urlencoded({ extended: true });
-app.use((req, res, next) => (req.path.startsWith("/interschool") ? next() : jsonBody(req, res, next)));
-app.use((req, res, next) => (req.path.startsWith("/interschool") ? next() : formBody(req, res, next)));
+const ownsBody = (p: string) => p.startsWith("/interschool") || p.startsWith("/ambassadors");
+app.use((req, res, next) => (ownsBody(req.path) ? next() : jsonBody(req, res, next)));
+app.use((req, res, next) => (ownsBody(req.path) ? next() : formBody(req, res, next)));
 
 app.use("/api", router);
 

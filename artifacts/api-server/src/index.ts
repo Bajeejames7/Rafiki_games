@@ -4,6 +4,7 @@ import { runMigrations } from "./lib/migrate";
 import { pool } from "@workspace/db";
 import { mountInterschool } from "./lib/interschool";
 import { mountKienyeji } from "./lib/kienyeji";
+import { mountAmbassadors } from "./lib/ambassadors";
 
 const rawPort = process.env["PORT"];
 
@@ -46,6 +47,7 @@ async function migrateOrRetry() {
 
 migrateOrRetry()
   .then(() => mountInterschool(app))
+  .then(() => mountAmbassadors(app))
   .then(async () => {
     kienyejiPing = await mountKienyeji(app);
   })
