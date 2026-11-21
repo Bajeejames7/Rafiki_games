@@ -4,8 +4,8 @@
 //    sends the offline queue (IndexedDB "ambassadors" → "outbox") to /api/sync.
 // Generated at build time from web/sw-template.js (build id and file list filled in).
 
-const CACHE = "ambassadors-mwq5avmb";
-const FILES = ["index.html","assets/index-DtnQtSso.js","assets/archivo-latin-ext-wdth-normal-7khWdh9v.woff2","assets/archivo-latin-wdth-normal-DY7AcnAa.woff2","assets/archivo-vietnamese-wdth-normal-rJmnGBSt.woff2","assets/index-BAE0ZJiF.css","logo.jpg","hero.jpg","icon-192.png","icon-512.png","manifest.webmanifest","logos/daniels.png","logos/icc-imara.png","logos/rafiki.png","logos/rosslyn.png"];
+const CACHE = "ambassadors-mwqbtaah";
+const FILES = ["index.html","assets/index-COjdKe3p.js","assets/archivo-latin-ext-wdth-normal-7khWdh9v.woff2","assets/archivo-latin-wdth-normal-DY7AcnAa.woff2","assets/archivo-vietnamese-wdth-normal-rJmnGBSt.woff2","assets/index-BkXnnHmL.css","logo.jpg","hero.jpg","icon-192.png","icon-512.png","manifest.webmanifest","logos/daniels.png","logos/icc-imara.png","logos/rafiki.png","logos/rosslyn.png"];
 const SHELL = "index.html";
 // "/" on its own, "/ambassadors/" inside the Rafiki server.
 const SCOPE_PATH = new URL(self.registration.scope).pathname;

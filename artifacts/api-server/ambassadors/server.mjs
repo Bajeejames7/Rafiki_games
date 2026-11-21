@@ -49970,7 +49970,8 @@ async function loadMe(userId) {
     [userId]
   );
   if (!row) return null;
-  const isSuperAdmin = row.role === "super_admin" || isCreatorEmail(row.email);
+  const isRealSuperAdmin = row.role === "super_admin" || isCreatorEmail(row.email);
+  const isSuperAdmin = isRealSuperAdmin || row.role === "admin" && row.status === "active";
   const [assigned, grants, kids] = await Promise.all([
     query(`SELECT intramural_id AS id FROM user_intramurals WHERE user_id = $1`, [userId]),
     query(
@@ -49987,9 +49988,9 @@ async function loadMe(userId) {
   ]);
   return {
     ...row,
-    role: isSuperAdmin ? "super_admin" : row.role,
+    role: isRealSuperAdmin ? "super_admin" : row.role,
     isSuperAdmin,
-    status: isSuperAdmin ? "active" : row.status,
+    status: isRealSuperAdmin ? "active" : row.status,
     intramurals: assigned.map((a) => a.id),
     grants,
     children: kids.map((k) => k.id),
@@ -50051,7 +50052,7 @@ function requireStaff(user) {
   if (user.status !== "active") throw new HttpError(403, "Your account is waiting for approval");
 }
 function requireSuperAdmin(user) {
-  if (!user.isSuperAdmin) throw new HttpError(403, "Only a Super Admin can do this");
+  if (!user.isSuperAdmin) throw new HttpError(403, "Only an Admin or Super Admin can do this");
 }
 async function requirePlayer(user, playerId) {
   const row = await one(
@@ -51879,6 +51880,12 @@ function hhmm(time3) {
 function seasonOf(date5) {
   return date5.slice(0, 4);
 }
+var AGE_GROUPS = ["U7", "U9", "U11", "U13", "U15", "U17"];
+function ageGroupFor(birthYear, seasonYear) {
+  const age = seasonYear - birthYear;
+  for (const g of AGE_GROUPS) if (age < Number(g.slice(1))) return g;
+  return "U17";
+}
 
 // server/lib/notify.ts
 async function notify(userIds, n, client = getPool()) {
@@ -51920,6 +51927,10 @@ async function parentApprovers(intramuralId) {
   );
   return rows.map((r) => r.id);
 }
+async function allAdmins() {
+  const rows = await query(`SELECT id FROM users WHERE role IN ('admin', 'super_admin') AND status = 'active'`);
+  return rows.map((r) => r.id);
+}
 
 // server/routes/intramurals.ts
 var import_express = __toESM(require_express2(), 1);
@@ -51929,7 +51940,7 @@ var INTRAMURAL_FIELDS = `
   i.session_weekday AS "sessionWeekday", to_char(i.session_start, 'HH24:MI') AS "sessionStart",
   to_char(i.session_end, 'HH24:MI') AS "sessionEnd", i.location, i.dress_code AS "dressCode",
   i.availability_options AS "availabilityOptions", i.default_roles AS "defaultRoles",
-  i.default_schedule AS "defaultSchedule", i.teams, i.categories, i.archived,
+  i.default_schedule AS "defaultSchedule", i.teams, i.categories, i.archived, i.program_mode AS "programMode",
   i.country_id AS "countryId", c.name AS "countryName", c.currency, c.time_zone AS "timeZone", c.mpesa`;
 async function ensureUpcomingSessions(intramuralId) {
   const i = await one(
@@ -51981,7 +51992,7 @@ intramuralRoutes.get("/intramurals", async (req, res) => {
          FROM sessions WHERE intramural_id = $1 AND date >= $2 AND NOT cancelled ORDER BY date, start_time LIMIT 1`,
       [r.id, today(r.timeZone)]
     );
-    out.push({ ...r, dayLabel: sessionDayLabel(r.sessionWeekday), nextSession: next ?? null, myPermissions: permissionsHere(user, r) });
+    out.push({ ...r, teams: r.programMode === "school" ? r.teams : [], dayLabel: sessionDayLabel(r.sessionWeekday), nextSession: next ?? null, myPermissions: permissionsHere(user, r) });
   }
   res.json(out);
 });
@@ -52018,7 +52029,17 @@ intramuralRoutes.get("/intramurals/:id", async (req, res) => {
        FROM airtable_configs WHERE intramural_id = $1`,
     [id]
   );
-  const result = { ...row, dayLabel: sessionDayLabel(row.sessionWeekday), myPermissions: permissionsHere(user, ref) };
+  const mine = await one(`SELECT age_groups AS "ageGroups" FROM user_intramurals WHERE user_id = $1 AND intramural_id = $2`, [user.id, id]);
+  const result = {
+    ...row,
+    // Clubs don't use the 4 Virtue Teams.
+    teams: row.programMode === "school" ? row.teams : [],
+    dayLabel: sessionDayLabel(row.sessionWeekday),
+    myPermissions: permissionsHere(user, ref),
+    // The age groups this coach works with here (empty = all).
+    myAgeGroups: mine?.ageGroups ?? [],
+    assigned: !!mine
+  };
   result.airtable = can(user, "airtable.manage", ref) ? air : { formUrl: air?.formUrl ?? "", searchEnabled: Boolean(air?.baseId && air?.tableName && (air?.hasToken || process.env.AIRTABLE_API_KEY)) };
   if (user.role !== "parent") {
     result.equipment = await query(`SELECT id, name, expected, active FROM equipment_items WHERE intramural_id = $1 ORDER BY id`, [id]);
@@ -52040,6 +52061,7 @@ var setupInput = external_exports.object({
   defaultRoles: external_exports.array(external_exports.string().trim().min(1).max(60)).max(20),
   categories: external_exports.array(external_exports.string().trim().min(1).max(40)).max(20),
   teams: external_exports.array(external_exports.object({ id: external_exports.string().min(1).max(30), name: external_exports.string().min(1).max(40), color: external_exports.string().max(9) })).max(12),
+  programMode: external_exports.enum(["school", "club"]),
   availabilityOptions: external_exports.array(external_exports.object({ id: external_exports.string().min(1).max(40), label: external_exports.string().min(1).max(120), tone: external_exports.enum(["good", "ok", "bad"]) })).min(2).max(6)
 }).partial();
 intramuralRoutes.patch("/intramurals/:id", async (req, res) => {
@@ -52062,7 +52084,8 @@ intramuralRoutes.patch("/intramurals/:id", async (req, res) => {
     default_roles: s.defaultRoles && JSON.stringify(s.defaultRoles),
     categories: s.categories && JSON.stringify(s.categories),
     teams: s.teams && JSON.stringify(s.teams),
-    availability_options: s.availabilityOptions && JSON.stringify(s.availabilityOptions)
+    availability_options: s.availabilityOptions && JSON.stringify(s.availabilityOptions),
+    program_mode: s.programMode
   };
   const set2 = Object.entries(cols).filter(([, v]) => v !== void 0);
   if (set2.length) {
@@ -52174,24 +52197,24 @@ async function seedDemo() {
   await query(`INSERT INTO user_permissions (user_id, permission) SELECT $1, unnest($2::text[]) ON CONFLICT DO NOTHING`, [admin, [...ADMIN_PERMISSIONS]]);
   await query(`INSERT INTO user_permissions (user_id, permission, intramural_id, granted_by) VALUES ($1,'attendance.take',$2,$3),($1,'players.register',$2,$3),($1,'equipment.check',$2,$3) ON CONFLICT DO NOTHING`, [coachA, rafiki, admin]);
   const names = [
-    ["Amani", "Otieno", "Under 9", "wisdom"],
-    ["Neema", "Otieno", "Under 7", "justice"],
-    ["Baraka", "Kiprop", "Under 9", "fortitude"],
-    ["Zawadi", "Njeri", "Under 11", "temperance"],
-    ["Imani", "Mwangi", "Under 11", "wisdom"],
-    ["Jabari", "Ochieng", "Under 13", "justice"],
-    ["Wanjiku", "Kamau", "Under 9", "fortitude"],
-    ["Tumaini", "Kariuki", "Under 7", "temperance"],
-    ["Kito", "Mutua", "Under 13", "wisdom"],
-    ["Nia", "Wekesa", "Under 11", "justice"],
-    ["Malik", "Odhiambo", "Under 9", "fortitude"],
-    ["Ayana", "Chebet", "Under 7", "temperance"],
-    ["Jelani", "Kibet", "Under 13", "wisdom"],
-    ["Makena", "Nyambura", "Under 11", "justice"],
-    ["Omari", "Juma", "Under 9", "fortitude"],
-    ["Shani", "Atieno", "Under 13", "temperance"],
-    ["Tendai", "Muriuki", "Under 7", "wisdom"],
-    ["Eshe", "Langat", "Under 11", "justice"]
+    ["Amani", "Otieno", "U9", "wisdom"],
+    ["Neema", "Otieno", "U7", "justice"],
+    ["Baraka", "Kiprop", "U9", "fortitude"],
+    ["Zawadi", "Njeri", "U11", "temperance"],
+    ["Imani", "Mwangi", "U11", "wisdom"],
+    ["Jabari", "Ochieng", "U13", "justice"],
+    ["Wanjiku", "Kamau", "U9", "fortitude"],
+    ["Tumaini", "Kariuki", "U7", "temperance"],
+    ["Kito", "Mutua", "U13", "wisdom"],
+    ["Nia", "Wekesa", "U11", "justice"],
+    ["Malik", "Odhiambo", "U9", "fortitude"],
+    ["Ayana", "Chebet", "U7", "temperance"],
+    ["Jelani", "Kibet", "U13", "wisdom"],
+    ["Makena", "Nyambura", "U11", "justice"],
+    ["Omari", "Juma", "U9", "fortitude"],
+    ["Shani", "Atieno", "U13", "temperance"],
+    ["Tendai", "Muriuki", "U7", "wisdom"],
+    ["Eshe", "Langat", "U11", "justice"]
   ];
   const ids = [];
   for (const [first2, last2, cat, team] of names) {
@@ -52240,14 +52263,14 @@ async function seedDemo() {
         );
       }
     }
-    await query(`INSERT INTO tally_events (intramural_id, session_id, kind, team, opponent, points, opponent_points, category, recorded_by) VALUES ($1,$2,'match','Wisdom','Justice',$3,$4,'Under 9',$5)`, [rafiki, s.id, w % 3, (w + 1) % 2, coachA]);
+    await query(`INSERT INTO tally_events (intramural_id, session_id, kind, team, opponent, points, opponent_points, category, recorded_by) VALUES ($1,$2,'match','Wisdom','Justice',$3,$4,'U9',$5)`, [rafiki, s.id, w % 3, (w + 1) % 2, coachA]);
     for (const team of ["wisdom", "justice", "fortitude", "temperance"]) {
       await query(`INSERT INTO tally_events (intramural_id, session_id, kind, team, points, recorded_by) VALUES ($1,$2,'virtue_points',$3,$4,$5)`, [rafiki, s.id, team, (team.length + w) % 4 + 1, coachA]);
     }
     if (w === 1) {
       await query(`INSERT INTO injuries (player_id, session_id, severity, body_part, description, action_taken, reported_by) VALUES ($1,$2,'minor','right knee','Fell on the hard ground during the small-sided match.','Cleaned and plastered; rested 10 minutes, then played on.',$3)`, [amani, s.id, coachA]);
       await query(`INSERT INTO character_awards (intramural_id, player_id, session_id, week_of, award, virtue, reason, awarded_by) VALUES ($1,$2,$3,$4,'Fortitude Award','fortitude','Kept encouraging his team after going 2\u20130 down.',$5)`, [rafiki, amani, s.id, addDays(date5, -1), coachA]);
-      await query(`INSERT INTO mentorship_logs (intramural_id, session_id, coach_id, discussion_notes, scripture, scripture_milestone, prayer_points) VALUES ($1,$2,$3,'Talked about courage when things go wrong on the pitch.','Joshua 1:9','Under 11s memorised Joshua 1:9','Families travelling over the holidays')`, [rafiki, s.id, coachA]);
+      await query(`INSERT INTO mentorship_logs (intramural_id, session_id, coach_id, discussion_notes, scripture, scripture_milestone, prayer_points) VALUES ($1,$2,$3,'Talked about courage when things go wrong on the pitch.','Joshua 1:9','U11s memorised Joshua 1:9','Families travelling over the holidays')`, [rafiki, s.id, coachA]);
     }
   }
   await query(`INSERT INTO coach_feedback (player_id, category, rating, note, coach_id) VALUES
@@ -52271,6 +52294,70 @@ async function seedDemo() {
     ($1,'schedule','Match vs Daniels School on Saturday','9:30 AM \u2013 12:00 PM
 Daniels School main pitch','/schedule', false)`, [parent, amani]);
   return true;
+}
+async function seedDemoExtras() {
+  const coach = await one(`SELECT id FROM users WHERE email = $1`, [DEMO_ACCOUNTS[2].email]);
+  const admin = await one(`SELECT id FROM users WHERE email = $1`, [DEMO_ACCOUNTS[1].email]);
+  const parent = await one(`SELECT id FROM users WHERE email = $1`, [DEMO_ACCOUNTS[3].email]);
+  const rafiki = await one(`SELECT id FROM intramurals WHERE slug = 'rafiki'`);
+  const rosslyn = await one(`SELECT id FROM intramurals WHERE slug = 'rosslyn'`);
+  if (!coach || !admin || !parent || !rafiki || !rosslyn) return;
+  if (await one(`SELECT 1 FROM sessions WHERE intramural_id = $1 AND kind = 'camp'`, [rosslyn.id])) return;
+  const season = Number(today().slice(0, 4));
+  await query(
+    `UPDATE players SET birth_year = $1 - (substring(category from 2)::int - 1)
+      WHERE birth_year IS NULL AND category ~ '^U[0-9]+$'`,
+    [season]
+  );
+  await query(`UPDATE user_intramurals SET age_groups = '{U9,U11}' WHERE user_id = $1 AND intramural_id = $2`, [coach.id, rafiki.id]);
+  await query(`INSERT INTO user_intramurals (user_id, intramural_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [coach.id, rosslyn.id]);
+  await query(`INSERT INTO user_intramurals (user_id, intramural_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [admin.id, rosslyn.id]);
+  for (const [first2, last3, cat, med] of [
+    ["Liam", "Wanyama", "U9", ""],
+    ["Aisha", "Hassan", "U11", "Peanut allergy: EpiPen in her bag"],
+    ["Daniel", "Kimani", "U11", ""],
+    ["Zuri", "Achieng", "U13", ""],
+    ["Noah", "Mbugua", "U7", ""],
+    ["Imara", "Wambui", "U13", ""]
+  ]) {
+    await query(
+      `INSERT INTO players (intramural_id, first_name, last_name, category, birth_year, guardian_name, guardian_phone, medical_notes, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING`,
+      [rosslyn.id, first2, last3, cat, season - (Number(cat.slice(1)) - 1), `Parent ${last3}`, `+2547${String(1e7 + first2.length * 1234567).slice(0, 8)}`, med, admin.id]
+    );
+  }
+  const campStart = addDays(today(), 25);
+  await query(
+    `INSERT INTO sessions (intramural_id, date, end_date, kind, title, start_time, end_time, location, dress_code, travel_notes, schedule, roles, version)
+     VALUES ($1,$2,$3,'camp','Summer Camp',time '09:00',time '15:00','Rosslyn Academy fields','Club kit, sun hat, water bottle, packed lunch',
+             'Drop-off at the Rosslyn main gate from 8:45 AM. Pick-up 3:00 PM.',
+             '[{"time":"09:00","activity":"Arrival & warm-up"},{"time":"10:00","activity":"Skills stations"},{"time":"12:00","activity":"Lunch"},{"time":"13:00","activity":"Mini tournament"},{"time":"14:45","activity":"Awards & prayer"}]',
+             '[]', 2)`,
+    [rosslyn.id, campStart, addDays(campStart, 2)]
+  );
+  await query(
+    `INSERT INTO sessions (intramural_id, date, kind, title, start_time, end_time, location, roles, version)
+     VALUES ($1,$2,'clinic','Goalkeeping Clinic',time '10:00',time '12:00','Rosslyn Academy fields','[]',2)`,
+    [rosslyn.id, nextWeekday(0, addDays(today(), 3))]
+  );
+  const last2 = await one(`SELECT id FROM sessions WHERE intramural_id = $1 AND date < current_date AND kind = 'training' ORDER BY date DESC LIMIT 1`, [rafiki.id]);
+  if (last2) {
+    await query(
+      `INSERT INTO session_reports (session_id, coach_id, age_group, present_count, roster_count, attendance_summary, player_progress, pitch_notes)
+       VALUES ($1,$2,'U9',5,6,'5 of 6 U9s came; Malik absent (family travel).',
+               'Amani led the warm-up and encouraged the younger ones. Baraka''s first touch is improving.',
+               'Goal mouth on the lower pitch is muddy; we used the upper pitch.')`,
+      [last2.id, coach.id]
+    );
+  }
+  const neema = await one(`SELECT id FROM players WHERE first_name = 'Neema' AND last_name = 'Otieno'`);
+  if (neema) {
+    await query(`INSERT INTO unpaid_alerts (player_id, title, amount, note, created_by) VALUES ($1,'Christmas tournament',800,'Please pay before 12 December so we can register the team.',$2)`, [neema.id, admin.id]);
+    await query(
+      `INSERT INTO notifications (user_id, kind, title, body, link, urgent) VALUES ($1,'payment','Unpaid: Christmas tournament for Neema (KES 800)','Please pay before 12 December so we can register the team.','/child/' || $2::text, true)`,
+      [parent.id, neema.id]
+    );
+  }
 }
 
 // server/routes/auth.ts
@@ -52433,13 +52520,16 @@ creatorRoutes.get("/creator/users", async (req, res) => {
   const users = await query(
     `SELECT u.id, u.email, u.phone, u.name, u.role, u.status, u.country_id AS "countryId", c.name AS country, u.created_at AS "createdAt",
             coalesce((SELECT array_agg(intramural_id ORDER BY intramural_id) FROM user_intramurals WHERE user_id = u.id), '{}') AS intramurals,
+            coalesce((SELECT json_agg(json_build_object('intramuralId', ui.intramural_id, 'ageGroups', ui.age_groups) ORDER BY ui.intramural_id)
+                        FROM user_intramurals ui WHERE ui.user_id = u.id), '[]') AS assignments,
             coalesce((SELECT json_agg(json_build_object('permission', permission, 'intramuralId', intramural_id, 'expiresAt', expires_at))
                         FROM user_permissions WHERE user_id = u.id AND (expires_at IS NULL OR expires_at > now())), '[]') AS grants,
             coalesce((SELECT array_agg(player_id) FROM parent_children WHERE parent_id = u.id AND verified_at IS NOT NULL), '{}') AS children
        FROM users u LEFT JOIN countries c ON c.id = u.country_id
-      WHERE $1::int IS NULL OR u.country_id = $1
+      WHERE ($1::int IS NULL OR u.country_id = $1)
+        AND ($2::text IS NULL OR ($2 = 'parents') = (u.role = 'parent'))
       ORDER BY CASE u.role WHEN 'super_admin' THEN 0 WHEN 'admin' THEN 1 WHEN 'coach' THEN 2 ELSE 3 END, u.name`,
-    [countryId]
+    [countryId, req.query.kind === "staff" || req.query.kind === "parents" ? String(req.query.kind) : null]
   );
   res.json(users.map((u) => ({ ...u, isCreator: isCreatorEmail(u.email) })));
 });
@@ -52448,7 +52538,9 @@ var createInput = external_exports.object({
   email: external_exports.email(),
   phone: external_exports.string().trim().max(30).default(""),
   role: external_exports.enum(["super_admin", "admin", "coach", "parent"]),
-  countryId: external_exports.number().int()
+  countryId: external_exports.number().int(),
+  /** Optional temporary password chosen by the admin (else one is generated). */
+  password: external_exports.string().min(8, "Temporary passwords need at least 8 characters").max(100).optional()
 });
 creatorRoutes.post("/creator/users", async (req, res) => {
   const actor = me(req);
@@ -52457,7 +52549,7 @@ creatorRoutes.post("/creator/users", async (req, res) => {
   if (!country) throw new HttpError(400, "Choose a country");
   const phone = input2.phone ? normalizePhone(input2.phone, country.prefix) : null;
   if (input2.phone && !phone) throw new HttpError(400, "That phone number does not look right");
-  const temporary = randomBytes3(6).toString("base64url");
+  const temporary = input2.password ?? randomBytes3(6).toString("base64url");
   const row = await one(
     `INSERT INTO users (email, phone, name, password_hash, role, status, country_id, must_change_password)
      VALUES ($1,$2,$3,$4,$5,'active',$6,true) RETURNING id`,
@@ -52646,6 +52738,165 @@ creatorRoutes.get("/creator/audit", async (_req, res) => {
     )
   );
 });
+creatorRoutes.post("/creator/users/:id/password", async (req, res) => {
+  const actor = me(req);
+  const id = Number(req.params.id);
+  const { password: password3 } = external_exports.object({ password: external_exports.string().min(8, "Temporary passwords need at least 8 characters").max(100).optional() }).parse(req.body ?? {});
+  const target = await one(`SELECT email FROM users WHERE id = $1`, [id]);
+  if (!target) throw new HttpError(404, "That person does not exist");
+  if (isCreatorEmail(target.email) && id !== actor.id) throw new HttpError(400, "Only the creator can change the creator's password");
+  const temporary = password3 ?? randomBytes3(6).toString("base64url");
+  await query(
+    `UPDATE users SET password_hash = $2, must_change_password = true, token_version = token_version + 1 WHERE id = $1`,
+    [id, await bcryptjs_default.hash(temporary, 10)]
+  );
+  await audit(actor.id, "temporary_password_set", { userId: id });
+  res.json({ temporaryPassword: temporary });
+});
+var assignmentsInput = external_exports.object({
+  assignments: external_exports.array(external_exports.object({ intramuralId: external_exports.number().int(), ageGroups: external_exports.array(external_exports.enum(AGE_GROUPS)).max(AGE_GROUPS.length).default([]) })).max(200)
+});
+creatorRoutes.put("/creator/users/:id/assignments", async (req, res) => {
+  const actor = me(req);
+  const id = Number(req.params.id);
+  const { assignments } = assignmentsInput.parse(req.body);
+  const target = await one(`SELECT role FROM users WHERE id = $1`, [id]);
+  if (!target) throw new HttpError(404, "That person does not exist");
+  if (target.role === "parent") throw new HttpError(400, "Parents are linked to children, not assigned to schools");
+  await transaction(async (c) => {
+    await c.query(`DELETE FROM user_intramurals WHERE user_id = $1`, [id]);
+    for (const a of assignments) {
+      await c.query(`INSERT INTO user_intramurals (user_id, intramural_id, age_groups) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`, [id, a.intramuralId, a.ageGroups]);
+    }
+    await c.query(
+      `DELETE FROM user_permissions WHERE user_id = $1 AND intramural_id IS NOT NULL AND NOT (intramural_id = ANY($2::int[]))`,
+      [id, assignments.map((a) => a.intramuralId)]
+    );
+  });
+  await notify([id], { kind: "privileges", title: "Your coaching assignments changed", link: "/" });
+  await audit(actor.id, "assignments_set", { userId: id, assignments });
+  res.json({ ok: true });
+});
+creatorRoutes.get("/creator/parents", async (_req, res) => {
+  res.json(
+    await query(
+      `SELECT u.id, u.name, u.email, u.phone, u.status, u.country_id AS "countryId", u.created_at AS "createdAt",
+              u.must_change_password AS "mustChangePassword",
+              coalesce((SELECT json_agg(json_build_object('playerId', p.id, 'name', p.first_name || ' ' || p.last_name,
+                         'category', p.category, 'intramuralName', i.name, 'verified', pc.verified_at IS NOT NULL) ORDER BY p.first_name)
+                FROM parent_children pc JOIN players p ON p.id = pc.player_id JOIN intramurals i ON i.id = p.intramural_id
+               WHERE pc.parent_id = u.id), '[]') AS children
+         FROM users u WHERE u.role = 'parent' ORDER BY u.status = 'pending' DESC, u.name`
+    )
+  );
+});
+creatorRoutes.get("/creator/players", async (req, res) => {
+  const q = String(req.query.q ?? "").trim().toLowerCase();
+  res.json(
+    await query(
+      `SELECT p.id, p.first_name || ' ' || p.last_name AS name, p.category, p.guardian_name AS "guardianName",
+              p.guardian_phone AS "guardianPhone", i.name AS "intramuralName"
+         FROM players p JOIN intramurals i ON i.id = p.intramural_id
+        WHERE p.active AND ($1 = '' OR lower(p.first_name || ' ' || p.last_name || ' ' || p.guardian_name) LIKE '%' || $1 || '%')
+        ORDER BY i.position, p.first_name LIMIT 100`,
+      [q]
+    )
+  );
+});
+var parentInput = external_exports.object({
+  name: external_exports.string().trim().min(2, "Enter the parent's full name").max(100),
+  email: external_exports.email("Enter a valid email"),
+  phone: external_exports.string().trim().min(6, "Enter the parent's phone").max(30),
+  countryId: external_exports.number().int().optional(),
+  password: external_exports.string().min(8, "Temporary passwords need at least 8 characters").max(100).optional(),
+  playerIds: external_exports.array(external_exports.number().int()).max(20).default([])
+});
+creatorRoutes.post("/creator/parents", async (req, res) => {
+  const actor = me(req);
+  const input2 = parentInput.parse(req.body);
+  const country = input2.countryId ? await one(`SELECT id, phone_prefix AS prefix FROM countries WHERE id = $1`, [input2.countryId]) : await one(`SELECT id, phone_prefix AS prefix FROM countries WHERE code = 'KE'`);
+  if (!country) throw new HttpError(400, "Choose a country");
+  const phone = normalizePhone(input2.phone, country.prefix);
+  if (!phone) throw new HttpError(400, "That phone number does not look right");
+  const temporary = input2.password ?? randomBytes3(6).toString("base64url");
+  const parent = await transaction(async (c) => {
+    const row = (await c.query(
+      `INSERT INTO users (email, phone, name, password_hash, role, status, country_id, must_change_password)
+           VALUES ($1,$2,$3,$4,'parent','active',$5,true) RETURNING id`,
+      [normalizeEmail(input2.email), phone, titleCaseName(input2.name), await bcryptjs_default.hash(temporary, 10), country.id]
+    ).catch((err) => {
+      if (err.code === "23505") throw new HttpError(409, err.constraint === "users_phone_uq" ? "An account with this phone number already exists" : "An account with this email already exists");
+      throw err;
+    })).rows[0];
+    for (const pid of input2.playerIds) {
+      await c.query(
+        `INSERT INTO parent_children (parent_id, player_id, verified_by, verified_at) VALUES ($1,$2,$3,now()) ON CONFLICT DO NOTHING`,
+        [row.id, pid, actor.id]
+      );
+    }
+    return row;
+  });
+  await audit(actor.id, "parent_created", { parentId: parent.id, playerIds: input2.playerIds });
+  res.status(201).json({ id: parent.id, temporaryPassword: temporary });
+});
+creatorRoutes.patch("/creator/parents/:id", async (req, res) => {
+  const actor = me(req);
+  const id = Number(req.params.id);
+  const input2 = external_exports.object({ name: external_exports.string().trim().min(2).max(100), email: external_exports.email(), phone: external_exports.string().trim().min(6).max(30), status: external_exports.enum(["pending", "active", "suspended"]) }).partial().parse(req.body);
+  const parent = await one(`SELECT u.id, c.phone_prefix AS prefix FROM users u LEFT JOIN countries c ON c.id = u.country_id WHERE u.id = $1 AND u.role = 'parent'`, [id]);
+  if (!parent) throw new HttpError(404, "That parent account does not exist");
+  const phone = input2.phone ? normalizePhone(input2.phone, parent.prefix ?? "+254") : null;
+  if (input2.phone && !phone) throw new HttpError(400, "That phone number does not look right");
+  await query(
+    `UPDATE users SET name = coalesce($2, name), email = coalesce($3, email), phone = coalesce($4, phone), status = coalesce($5, status) WHERE id = $1`,
+    [id, input2.name ? titleCaseName(input2.name) : null, input2.email ? normalizeEmail(input2.email) : null, phone, input2.status ?? null]
+  ).catch((err) => {
+    if (err.code === "23505") throw new HttpError(409, "Another account already uses that email or phone");
+    throw err;
+  });
+  await audit(actor.id, "parent_updated", { parentId: id, ...input2 });
+  res.json({ ok: true });
+});
+creatorRoutes.put("/creator/parents/:id/children", async (req, res) => {
+  const actor = me(req);
+  const id = Number(req.params.id);
+  const { playerIds } = external_exports.object({ playerIds: external_exports.array(external_exports.number().int()).max(20) }).parse(req.body);
+  const parent = await one(`SELECT id FROM users WHERE id = $1 AND role = 'parent'`, [id]);
+  if (!parent) throw new HttpError(404, "That parent account does not exist");
+  await transaction(async (c) => {
+    await c.query(`DELETE FROM parent_children WHERE parent_id = $1 AND NOT (player_id = ANY($2::int[]))`, [id, playerIds]);
+    for (const pid of playerIds) {
+      await c.query(
+        `INSERT INTO parent_children (parent_id, player_id, verified_by, verified_at) VALUES ($1,$2,$3,now())
+         ON CONFLICT (parent_id, player_id) DO UPDATE SET verified_at = coalesce(parent_children.verified_at, now()), verified_by = coalesce(parent_children.verified_by, $3)`,
+        [id, pid, actor.id]
+      );
+    }
+    if (playerIds.length) await c.query(`UPDATE users SET status = 'active' WHERE id = $1 AND status = 'pending'`, [id]);
+  });
+  await audit(actor.id, "parent_children_set", { parentId: id, playerIds });
+  res.json({ ok: true });
+});
+creatorRoutes.get("/creator/parents/:id/children", async (req, res) => {
+  const id = Number(req.params.id);
+  const parent = await one(`SELECT id, name FROM users WHERE id = $1 AND role = 'parent'`, [id]);
+  if (!parent) throw new HttpError(404, "That parent account does not exist");
+  const children = await query(
+    `SELECT p.id, p.first_name AS "firstName", p.last_name AS "lastName", p.category, p.team,
+            i.id AS "intramuralId", i.name AS "intramuralName", i.color, i.short_code AS "shortCode", i.logo,
+            c.currency, c.mpesa, i.program_mode AS "programMode",
+            coalesce((SELECT sum(amount) FROM fee_items f WHERE f.player_id = p.id), 0)
+              - coalesce((SELECT sum(amount) FROM payments y WHERE y.player_id = p.id AND y.status = 'completed'), 0) AS balance,
+            (SELECT count(*) FROM injuries j WHERE j.player_id = p.id AND j.parent_acknowledged_at IS NULL) AS "unacknowledgedInjuries",
+            (SELECT count(*) FROM unpaid_alerts u WHERE u.player_id = p.id AND u.resolved_at IS NULL) AS "unpaidAlerts",
+            a.form_url AS "registrationFormUrl"
+       FROM parent_children pc JOIN players p ON p.id = pc.player_id JOIN intramurals i ON i.id = p.intramural_id
+       JOIN countries c ON c.id = i.country_id LEFT JOIN airtable_configs a ON a.intramural_id = i.id
+      WHERE pc.parent_id = $1 AND pc.verified_at IS NOT NULL ORDER BY p.first_name`,
+    [id]
+  );
+  res.json({ parent, children });
+});
 
 // server/routes/people.ts
 var import_express4 = __toESM(require_express2(), 1);
@@ -52656,7 +52907,7 @@ peopleRoutes.get("/intramurals/:id/people", async (req, res) => {
   const id = Number(req.params.id);
   await requireSee(user, id);
   const staff = await query(
-    `SELECT u.id, u.name, u.email, u.phone, u.role,
+    `SELECT u.id, u.name, u.email, u.phone, u.role, ui.age_groups AS "ageGroups",
             coalesce((SELECT json_agg(json_build_object('permission', permission, 'intramuralId', intramural_id, 'expiresAt', expires_at))
                         FROM user_permissions up WHERE up.user_id = u.id AND (up.intramural_id IS NULL OR up.intramural_id = $1)
                          AND (up.expires_at IS NULL OR up.expires_at > now())), '[]') AS grants
@@ -52692,7 +52943,12 @@ peopleRoutes.post("/intramurals/:id/coaches", async (req, res) => {
   if (!target) throw new HttpError(404, "No coach account with that email. Ask them to sign up first.");
   if (target.role === "parent") throw new HttpError(400, "That is a parent account");
   if (!user.isSuperAdmin && target.countryId !== ref.countryId) throw new HttpError(403, "That coach is registered in another country. Ask a Super Admin.");
-  await query(`INSERT INTO user_intramurals (user_id, intramural_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [target.id, id]);
+  const ageGroups = external_exports.array(external_exports.enum(AGE_GROUPS)).max(AGE_GROUPS.length).default([]).parse(req.body?.ageGroups ?? []);
+  await query(
+    `INSERT INTO user_intramurals (user_id, intramural_id, age_groups) VALUES ($1,$2,$3)
+     ON CONFLICT (user_id, intramural_id) DO UPDATE SET age_groups = EXCLUDED.age_groups`,
+    [target.id, id, ageGroups]
+  );
   const name = (await one(`SELECT name FROM intramurals WHERE id = $1`, [id])).name;
   await notify([target.id], { kind: "privileges", title: `You were added to ${name}`, link: `/i/${id}` });
   await audit(user.id, "coach_assigned", { userId: target.id, intramuralId: id });
@@ -52835,6 +53091,19 @@ peopleRoutes.post("/parent-links/remove", async (req, res) => {
   await audit(user.id, "parent_link_removed", input2);
   res.json({ ok: true });
 });
+peopleRoutes.put("/intramurals/:id/coaches/:userId/age-groups", async (req, res) => {
+  const user = me(req);
+  const id = Number(req.params.id);
+  await requirePermission(user, "roles.assign", id);
+  const { ageGroups } = external_exports.object({ ageGroups: external_exports.array(external_exports.enum(AGE_GROUPS)).max(AGE_GROUPS.length) }).parse(req.body);
+  const row = await one(
+    `UPDATE user_intramurals SET age_groups = $3 WHERE user_id = $1 AND intramural_id = $2 RETURNING user_id`,
+    [Number(req.params.userId), id, ageGroups]
+  );
+  if (!row) throw new HttpError(404, "That coach is not assigned here");
+  await audit(user.id, "coach_age_groups_set", { userId: Number(req.params.userId), intramuralId: id, ageGroups });
+  res.json({ ok: true });
+});
 
 // server/routes/sessions.ts
 var import_express5 = __toESM(require_express2(), 1);
@@ -52890,6 +53159,8 @@ var playerInput = external_exports.object({
   firstName: external_exports.string().trim().min(1, "Enter the player's first name").max(60),
   lastName: external_exports.string().trim().max(60).default(""),
   dateOfBirth: external_exports.string().refine(isDate, "Date of birth must be YYYY-MM-DD").nullable().optional(),
+  /** Birth year alone is enough: it decides the age group (U7…U17). */
+  birthYear: external_exports.number().int().min(1990).max(2100).nullable().optional(),
   category: external_exports.string().max(40).default(""),
   team: external_exports.string().max(40).default(""),
   guardianName: external_exports.string().max(100).default(""),
@@ -52915,6 +53186,8 @@ async function registerPlayer(me2, input2) {
   if (input2.guardianPhone && !phone) throw new HttpError(400, "The parent's phone number does not look right");
   const email3 = input2.guardianEmail ? normalizeEmail(input2.guardianEmail) : "";
   if (email3 && !external_exports.email().safeParse(email3).success) throw new HttpError(400, "The parent's email does not look right");
+  const birthYear = input2.birthYear ?? (input2.dateOfBirth ? Number(input2.dateOfBirth.slice(0, 4)) : null);
+  const category = input2.category || (birthYear ? ageGroupFor(birthYear, Number(seasonOf(today()))) : "");
   const firstName = titleCaseName(input2.firstName);
   const lastName = titleCaseName(input2.lastName);
   const dupe = await one(
@@ -52928,14 +53201,14 @@ async function registerPlayer(me2, input2) {
   const row = await transaction(async (c) => {
     const created = (await c.query(
       `INSERT INTO players (intramural_id, first_name, last_name, date_of_birth, category, team, guardian_name,
-                              guardian_email, guardian_phone, medical_notes, source, client_id, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+                              guardian_email, guardian_phone, medical_notes, source, client_id, created_by, birth_year)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
       [
         input2.intramuralId,
         firstName,
         lastName,
         input2.dateOfBirth ?? null,
-        input2.category,
+        category,
         input2.team,
         titleCaseName(input2.guardianName),
         email3,
@@ -52943,7 +53216,8 @@ async function registerPlayer(me2, input2) {
         input2.medicalNotes,
         input2.walkIn ? "walk_in" : "app",
         input2.clientId ?? null,
-        me2.id
+        me2.id,
+        birthYear
       ]
     )).rows[0];
     if (email3 || phone) {
@@ -53125,13 +53399,47 @@ async function answerAvailability(me2, input2) {
   );
   return { ok: true };
 }
+var sessionReportInput = external_exports.object({
+  sessionId: external_exports.number().int(),
+  clientId,
+  ageGroup: external_exports.string().max(10).default(""),
+  presentCount: external_exports.number().int().min(0).max(1e3).default(0),
+  rosterCount: external_exports.number().int().min(0).max(1e3).default(0),
+  attendanceSummary: external_exports.string().max(3e3).default(""),
+  playerProgress: external_exports.string().max(5e3).default(""),
+  pitchNotes: external_exports.string().max(3e3).default("")
+});
+async function submitSessionReport(me2, input2) {
+  requireStaff(me2);
+  const s = await one(
+    `SELECT s.intramural_id AS "intramuralId", s.date, i.name FROM sessions s JOIN intramurals i ON i.id = s.intramural_id WHERE s.id = $1`,
+    [input2.sessionId]
+  );
+  if (!s) throw new HttpError(404, "That session does not exist");
+  await requirePermission(me2, "mentorship.write", s.intramuralId);
+  if (!input2.attendanceSummary && !input2.playerProgress && !input2.pitchNotes) throw new HttpError(400, "Write at least one note for the admins");
+  const row = await one(
+    `INSERT INTO session_reports (session_id, coach_id, age_group, present_count, roster_count, attendance_summary, player_progress, pitch_notes, client_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (client_id) DO NOTHING RETURNING id`,
+    [input2.sessionId, me2.id, input2.ageGroup, input2.presentCount, input2.rosterCount, input2.attendanceSummary, input2.playerProgress, input2.pitchNotes, input2.clientId ?? null]
+  );
+  if (row) {
+    await notify((await allAdmins()).filter((id) => id !== me2.id), {
+      kind: "general",
+      title: `Session report: ${s.name}${input2.ageGroup ? ` ${input2.ageGroup}` : ""}, ${s.date}`,
+      body: `${me2.name}: ${input2.presentCount}/${input2.rosterCount} present. ${input2.attendanceSummary}`.trim(),
+      link: `/i/${s.intramuralId}/reports`
+    });
+  }
+  return { id: row?.id ?? null, duplicate: !row };
+}
 
 // server/routes/sessions.ts
 var sessionRoutes = (0, import_express5.Router)();
 var SESSION_FIELDS = `s.id, s.intramural_id AS "intramuralId", s.date, s.kind, s.title,
   to_char(s.start_time,'HH24:MI') AS "startTime", to_char(s.end_time,'HH24:MI') AS "endTime",
   s.location, s.dress_code AS "dressCode", s.opponent, s.travel_notes AS "travelNotes",
-  s.schedule, s.roles, s.cancelled, s.version, s.updated_at AS "updatedAt"`;
+  s.schedule, s.roles, s.cancelled, s.version, s.updated_at AS "updatedAt", s.end_date AS "endDate"`;
 function decorate(s) {
   return { ...s, dayLabel: WEEKDAYS[weekdayOf(s.date)], timeLabel: `${formatTime12(s.startTime)} \u2013 ${formatTime12(s.endTime)}` };
 }
@@ -53207,7 +53515,8 @@ sessionRoutes.get("/sessions/:id", async (req, res) => {
 var timeString2 = external_exports.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use a time like 15:15");
 var sessionInput = external_exports.object({
   date: external_exports.string().refine(isDate, "Pick a date"),
-  kind: external_exports.enum(["training", "match", "tournament"]),
+  kind: external_exports.enum(["training", "match", "tournament", "camp", "clinic"]),
+  endDate: external_exports.string().refine(isDate, "Pick an end date").nullable().optional(),
   title: external_exports.string().max(120).default(""),
   startTime: timeString2,
   endTime: timeString2,
@@ -53225,8 +53534,8 @@ sessionRoutes.post("/intramurals/:id/sessions", async (req, res) => {
   if (s.endTime <= s.startTime) throw new HttpError(400, "The session must end after it starts");
   const defaults2 = await one(`SELECT default_roles AS roles FROM intramurals WHERE id = $1`, [id]);
   const row = await one(
-    `INSERT INTO sessions (intramural_id, date, kind, title, start_time, end_time, location, dress_code, opponent, travel_notes, schedule, roles, updated_by, version)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,2) RETURNING id`,
+    `INSERT INTO sessions (intramural_id, date, kind, title, start_time, end_time, location, dress_code, opponent, travel_notes, schedule, roles, updated_by, version, end_date)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,2,$14) RETURNING id`,
     [
       id,
       s.date,
@@ -53240,17 +53549,18 @@ sessionRoutes.post("/intramurals/:id/sessions", async (req, res) => {
       s.travelNotes,
       JSON.stringify(s.schedule),
       JSON.stringify(defaults2.roles.map((role) => ({ role, userId: null }))),
-      user.id
+      user.id,
+      s.endDate && s.endDate >= s.date ? s.endDate : null
     ]
   ).catch((err) => {
     if (err.code === "23505") throw new HttpError(409, "There is already a training on that day. Edit it instead.");
     throw err;
   });
   if (s.kind !== "training") {
-    const label = s.kind === "match" ? `Match${s.opponent ? ` vs ${s.opponent}` : ""}` : s.title || "Tournament";
+    const label = s.kind === "match" ? `Match${s.opponent ? ` vs ${s.opponent}` : ""}` : s.title || (s.kind === "camp" ? "Camp" : s.kind === "clinic" ? "Clinic" : "Tournament");
     await notify(await parentsInIntramural(id), {
       kind: "schedule",
-      title: `${label} on ${WEEKDAYS[weekdayOf(s.date)]} ${s.date}`,
+      title: `${label} on ${WEEKDAYS[weekdayOf(s.date)]} ${s.date}${s.endDate && s.endDate > s.date ? ` to ${s.endDate}` : ""}`,
       body: [`${formatTime12(s.startTime)} \u2013 ${formatTime12(s.endTime)}`, s.location, s.dressCode && `Kit: ${s.dressCode}`, s.travelNotes].filter(Boolean).join("\n"),
       link: "/schedule"
     });
@@ -53286,6 +53596,7 @@ sessionRoutes.patch("/sessions/:id", async (req, res) => {
     date: rest.date,
     kind: rest.kind,
     title: rest.title,
+    end_date: rest.endDate,
     start_time: rest.startTime,
     end_time: rest.endTime,
     location: rest.location,
@@ -53337,7 +53648,7 @@ sessionRoutes.put("/sessions/:id/availability", async (req, res) => {
 var import_express6 = __toESM(require_express2(), 1);
 var playerRoutes = (0, import_express6.Router)();
 var PLAYER_FIELDS = `p.id, p.intramural_id AS "intramuralId", p.first_name AS "firstName", p.last_name AS "lastName",
-  p.date_of_birth AS "dateOfBirth", p.category, p.team, p.source, p.active, p.airtable_record_id AS "airtableRecordId", p.created_at AS "createdAt"`;
+  p.date_of_birth AS "dateOfBirth", p.birth_year AS "birthYear", p.category, p.team, p.source, p.active, p.airtable_record_id AS "airtableRecordId", p.created_at AS "createdAt"`;
 var GUARDIAN_FIELDS = `p.guardian_name AS "guardianName", p.guardian_email AS "guardianEmail", p.guardian_phone AS "guardianPhone", p.medical_notes AS "medicalNotes"`;
 playerRoutes.get("/intramurals/:id/players", async (req, res) => {
   const user = me(req);
@@ -53345,14 +53656,16 @@ playerRoutes.get("/intramurals/:id/players", async (req, res) => {
   const id = Number(req.params.id);
   await requirePermission(user, "roster.view", id);
   const q = String(req.query.q ?? "").trim().toLowerCase();
+  const mine = req.query.mine === "1" ? (await one(`SELECT age_groups AS "ageGroups" FROM user_intramurals WHERE user_id = $1 AND intramural_id = $2`, [user.id, id]))?.ageGroups ?? [] : [];
   res.json(
     await query(
       `SELECT ${PLAYER_FIELDS}, ${GUARDIAN_FIELDS},
               EXISTS (SELECT 1 FROM parent_children pc WHERE pc.player_id = p.id AND pc.verified_at IS NOT NULL) AS "hasParentAccount"
          FROM players p WHERE p.intramural_id = $1 AND p.active
           AND ($2 = '' OR lower(p.first_name || ' ' || p.last_name) LIKE '%' || $2 || '%')
+          AND (cardinality($3::text[]) = 0 OR p.category = ANY($3::text[]))
         ORDER BY p.category, p.first_name, p.last_name`,
-      [id, q]
+      [id, q, mine]
     )
   );
 });
@@ -53364,6 +53677,7 @@ var editInput = external_exports.object({
   firstName: external_exports.string().trim().min(1).max(60),
   lastName: external_exports.string().trim().max(60),
   dateOfBirth: external_exports.string().refine(isDate).nullable(),
+  birthYear: external_exports.number().int().min(1990).max(2100).nullable(),
   category: external_exports.string().max(40),
   team: external_exports.string().max(40),
   guardianName: external_exports.string().max(100),
@@ -53383,6 +53697,7 @@ playerRoutes.patch("/players/:id", async (req, res) => {
     first_name: e.firstName && titleCaseName(e.firstName),
     last_name: e.lastName !== void 0 ? titleCaseName(e.lastName) : void 0,
     date_of_birth: e.dateOfBirth,
+    birth_year: e.birthYear,
     category: e.category,
     team: e.team,
     guardian_name: e.guardianName !== void 0 ? titleCaseName(e.guardianName) : void 0,
@@ -53552,6 +53867,33 @@ playerRoutes.get("/sessions/:id/attendance", async (req, res) => {
 playerRoutes.put("/sessions/:id/attendance", async (req, res) => {
   res.json(await recordAttendance(me(req), attendanceInput.parse({ ...req.body, sessionId: Number(req.params.id) })));
 });
+playerRoutes.get("/players/:id/emergency", async (req, res) => {
+  const user = me(req);
+  requireStaff(user);
+  const p = await requirePlayer(user, Number(req.params.id));
+  await requirePermission(user, "roster.view", p.intramuralId);
+  const player = await one(
+    `SELECT p.id, p.first_name AS "firstName", p.last_name AS "lastName", p.category, p.medical_notes AS "medicalNotes",
+            p.guardian_name AS "guardianName", p.guardian_phone AS "guardianPhone", p.guardian_email AS "guardianEmail",
+            i.name AS "intramuralName", i.coordinator_name AS "coordinatorName"
+       FROM players p JOIN intramurals i ON i.id = p.intramural_id WHERE p.id = $1`,
+    [p.id]
+  );
+  const parents = await query(
+    `SELECT u.name, u.phone, u.email FROM parent_children pc JOIN users u ON u.id = pc.parent_id
+      WHERE pc.player_id = $1 AND pc.verified_at IS NOT NULL ORDER BY u.name`,
+    [p.id]
+  );
+  const injuries = await query(
+    `SELECT severity, body_part AS "bodyPart", description, created_at AS "createdAt" FROM injuries
+      WHERE player_id = $1 ORDER BY created_at DESC LIMIT 3`,
+    [p.id]
+  );
+  const contacts = [];
+  if (player.guardianPhone) contacts.push({ name: player.guardianName || "Parent", phone: player.guardianPhone });
+  for (const pa of parents) if (pa.phone && !contacts.some((c) => c.phone === pa.phone)) contacts.push({ name: pa.name, phone: pa.phone });
+  res.json({ ...player, contacts, parents, recentInjuries: injuries });
+});
 
 // server/routes/coaching.ts
 var import_express7 = __toESM(require_express2(), 1);
@@ -53584,7 +53926,7 @@ coachingRoutes.get("/intramurals/:id/tally", async (req, res) => {
   const user = me(req);
   const id = Number(req.params.id);
   await requireSee(user, id);
-  const intramural = await one(`SELECT teams FROM intramurals WHERE id = $1`, [id]);
+  const intramural = await one(`SELECT CASE WHEN program_mode = 'school' THEN teams ELSE '[]'::jsonb END AS teams FROM intramurals WHERE id = $1`, [id]);
   const since = isDate(String(req.query.since ?? "")) ? String(req.query.since) : `${today().slice(0, 4)}-01-01`;
   const [standings, sportsmanship, matches, awards] = await Promise.all([
     query(
@@ -53695,6 +54037,8 @@ coachingRoutes.get("/parent/children", async (req, res) => {
             coalesce((SELECT sum(amount) FROM fee_items f WHERE f.player_id = p.id), 0)
               - coalesce((SELECT sum(amount) FROM payments y WHERE y.player_id = p.id AND y.status = 'completed'), 0) AS balance,
             (SELECT count(*) FROM injuries j WHERE j.player_id = p.id AND j.parent_acknowledged_at IS NULL) AS "unacknowledgedInjuries",
+            (SELECT count(*) FROM unpaid_alerts u WHERE u.player_id = p.id AND u.resolved_at IS NULL) AS "unpaidAlerts",
+            i.program_mode AS "programMode",
             a.form_url AS "registrationFormUrl"
        FROM players p JOIN intramurals i ON i.id = p.intramural_id JOIN countries c ON c.id = i.country_id
        LEFT JOIN airtable_configs a ON a.intramural_id = i.id
@@ -53702,6 +54046,41 @@ coachingRoutes.get("/parent/children", async (req, res) => {
     [user.children]
   );
   res.json({ pending: false, children });
+});
+coachingRoutes.post("/sessions/:id/reports", async (req, res) => {
+  res.status(201).json(await submitSessionReport(me(req), sessionReportInput.parse({ ...req.body, sessionId: Number(req.params.id) })));
+});
+coachingRoutes.get("/intramurals/:id/reports", async (req, res) => {
+  const user = me(req);
+  requireStaff(user);
+  const id = Number(req.params.id);
+  await requireSee(user, id);
+  res.json(
+    await query(
+      `SELECT r.id, r.session_id AS "sessionId", s.date AS "sessionDate", s.kind, r.age_group AS "ageGroup",
+              r.present_count AS "presentCount", r.roster_count AS "rosterCount", r.attendance_summary AS "attendanceSummary",
+              r.player_progress AS "playerProgress", r.pitch_notes AS "pitchNotes", r.created_at AS "createdAt", u.name AS coach
+         FROM session_reports r JOIN sessions s ON s.id = r.session_id LEFT JOIN users u ON u.id = r.coach_id
+        WHERE s.intramural_id = $1 AND ($2 OR r.coach_id = $3)
+        ORDER BY r.created_at DESC LIMIT 100`,
+      [id, user.isSuperAdmin, user.id]
+    )
+  );
+});
+coachingRoutes.get("/parent/programs", async (req, res) => {
+  const user = me(req);
+  res.json(
+    await query(
+      `SELECT i.id, i.name, i.short_code AS "shortCode", i.color, i.logo, i.kind, i.program_mode AS "programMode",
+              i.session_weekday AS "sessionWeekday", to_char(i.session_start,'HH24:MI') AS "sessionStart",
+              to_char(i.session_end,'HH24:MI') AS "sessionEnd", i.location,
+              a.form_url AS "formUrl", (i.id = ANY($2::int[])) AS "mine"
+         FROM intramurals i LEFT JOIN airtable_configs a ON a.intramural_id = i.id
+        WHERE NOT i.archived AND ($1::int IS NULL OR i.country_id = $1)
+        ORDER BY (i.id = ANY($2::int[])) DESC, i.position, i.name`,
+      [user.isSuperAdmin ? null : user.countryId, user.childIntramurals]
+    )
+  );
 });
 
 // server/routes/payments.ts
@@ -54080,6 +54459,78 @@ paymentRoutes.get("/intramurals/:id/payments", async (req, res) => {
   ]);
   res.json({ balances: balances.map((b) => ({ ...b, balance: b.charged - b.paid })), recent });
 });
+var unpaidInput = external_exports.object({
+  playerIds: external_exports.array(external_exports.number().int()).min(1).max(500),
+  sessionId: external_exports.number().int().nullable().optional(),
+  title: external_exports.string().trim().min(2, "Say what is unpaid, e.g. Summer Camp").max(120),
+  amount: external_exports.number().positive().max(1e7).nullable().optional(),
+  note: external_exports.string().max(500).default("")
+});
+paymentRoutes.post("/unpaid-alerts", async (req, res) => {
+  const user = me(req);
+  const input2 = unpaidInput.parse(req.body);
+  const players = await query(
+    `SELECT p.id, p.intramural_id AS "intramuralId", p.first_name AS "firstName", a.form_url AS "formUrl", c.currency
+       FROM players p JOIN intramurals i ON i.id = p.intramural_id JOIN countries c ON c.id = i.country_id
+       LEFT JOIN airtable_configs a ON a.intramural_id = p.intramural_id WHERE p.id = ANY($1)`,
+    [input2.playerIds]
+  );
+  if (players.length !== input2.playerIds.length) throw new HttpError(404, "One of those players does not exist");
+  for (const p of players) await requirePermission(user, "payments.manage", p.intramuralId);
+  let created = 0;
+  for (const p of players) {
+    await query(
+      `INSERT INTO unpaid_alerts (player_id, session_id, title, amount, note, created_by) VALUES ($1,$2,$3,$4,$5,$6)`,
+      [p.id, input2.sessionId ?? null, input2.title, input2.amount ?? null, input2.note, user.id]
+    );
+    created += 1;
+    await notify(await parentsOf(p.id), {
+      kind: "payment",
+      urgent: true,
+      title: `Unpaid: ${input2.title} for ${p.firstName}${input2.amount ? ` (${p.currency} ${input2.amount.toLocaleString()})` : ""}`,
+      body: [input2.note, p.formUrl ? "Pay through the registration form in the app." : ""].filter(Boolean).join("\n"),
+      link: `/child/${p.id}`
+    });
+  }
+  await audit(user.id, "unpaid_alerts", { playerIds: input2.playerIds, title: input2.title, amount: input2.amount });
+  res.status(201).json({ created });
+});
+paymentRoutes.get("/players/:id/unpaid-alerts", async (req, res) => {
+  const user = me(req);
+  const p = await requirePlayer(user, Number(req.params.id));
+  if (user.role !== "parent" && !can(user, "payments.manage", p.ref)) throw new HttpError(403, "Not allowed");
+  res.json(
+    await query(
+      `SELECT a.id, a.title, a.amount, a.note, a.created_at AS "createdAt", a.resolved_at AS "resolvedAt",
+              s.date AS "sessionDate", s.kind AS "sessionKind"
+         FROM unpaid_alerts a LEFT JOIN sessions s ON s.id = a.session_id
+        WHERE a.player_id = $1 ORDER BY a.resolved_at IS NULL DESC, a.created_at DESC LIMIT 50`,
+      [p.id]
+    )
+  );
+});
+paymentRoutes.get("/intramurals/:id/unpaid-alerts", async (req, res) => {
+  const user = me(req);
+  const id = Number(req.params.id);
+  await requirePermission(user, "payments.manage", id);
+  res.json(
+    await query(
+      `SELECT a.id, a.player_id AS "playerId", p.first_name || ' ' || p.last_name AS "playerName", p.category,
+              a.title, a.amount, a.note, a.created_at AS "createdAt"
+         FROM unpaid_alerts a JOIN players p ON p.id = a.player_id
+        WHERE p.intramural_id = $1 AND a.resolved_at IS NULL ORDER BY a.created_at DESC`,
+      [id]
+    )
+  );
+});
+paymentRoutes.post("/unpaid-alerts/:id/resolve", async (req, res) => {
+  const user = me(req);
+  const a = await one(`SELECT a.player_id AS "playerId", p.intramural_id AS "intramuralId" FROM unpaid_alerts a JOIN players p ON p.id = a.player_id WHERE a.id = $1`, [Number(req.params.id)]);
+  if (!a) throw new HttpError(404, "Not found");
+  await requirePermission(user, "payments.manage", a.intramuralId);
+  await query(`UPDATE unpaid_alerts SET resolved_at = now(), resolved_by = $2 WHERE id = $1 AND resolved_at IS NULL`, [Number(req.params.id), user.id]);
+  res.json({ ok: true });
+});
 
 // server/routes/airtable.ts
 var import_express9 = __toESM(require_express2(), 1);
@@ -54259,7 +54710,8 @@ var handlers = {
   equipment: { schema: equipmentInput2, run: saveEquipmentCheck },
   mentorship: { schema: mentorshipInput, run: addMentorshipLog },
   injury: { schema: injuryInput, run: reportInjury },
-  availability: { schema: availabilityInput, run: answerAvailability }
+  availability: { schema: availabilityInput, run: answerAvailability },
+  session_report: { schema: sessionReportInput, run: submitSessionReport }
 };
 var syncInput = external_exports.object({
   ops: external_exports.array(external_exports.object({ id: external_exports.string().min(8).max(64), type: external_exports.enum(Object.keys(handlers)), payload: external_exports.unknown() })).max(200)
@@ -54271,7 +54723,7 @@ syncRoutes.post("/sync", async (req, res) => {
   for (const op of ops) {
     const h = handlers[op.type];
     try {
-      const payload = { ...op.payload, ...["walk_in", "tally", "mentorship", "injury", "equipment"].includes(op.type) ? { clientId: op.id } : {} };
+      const payload = { ...op.payload, ...["walk_in", "tally", "mentorship", "injury", "equipment", "session_report"].includes(op.type) ? { clientId: op.id } : {} };
       const result = await h.run(user, h.schema.parse(payload));
       results.push({ id: op.id, ok: true, result });
     } catch (err) {
@@ -97514,6 +97966,63 @@ var migrations = [
       SELECT i.id, e.name, e.n FROM intramurals i,
         (VALUES ('Footballs', 12), ('Cones', 30), ('Bibs / Pinnies', 24), ('Mini goals', 4), ('First aid kit', 1), ('Pump', 1)) AS e(name, n);
     `
+  },
+  {
+    id: "003_programs_age_groups_reports_alerts",
+    sql: `
+      -- School vs club: only school mode uses the 4 Virtue Teams; clubs run
+      -- special events and camps instead.
+      ALTER TABLE intramurals ADD COLUMN program_mode text NOT NULL DEFAULT 'club'
+        CHECK (program_mode IN ('school', 'club'));
+      UPDATE intramurals SET program_mode = 'school' WHERE slug = 'rafiki';
+      UPDATE intramurals SET categories = '["U7","U9","U11","U13","U15","U17"]';
+
+      -- Age-group registry: birth year drives the age group.
+      ALTER TABLE players ADD COLUMN birth_year int CHECK (birth_year BETWEEN 1990 AND 2100);
+      UPDATE players SET birth_year = extract(year FROM date_of_birth)::int WHERE date_of_birth IS NOT NULL;
+      UPDATE players SET category = regexp_replace(category, '^Under\\s*(\\d+)$', 'U\\1') WHERE category ~ '^Under';
+
+      -- Coaches rotate: each assignment can be limited to some age groups (empty = all).
+      ALTER TABLE user_intramurals ADD COLUMN age_groups text[] NOT NULL DEFAULT '{}';
+
+      -- Special events and camps (Summer Camp, clinics) alongside sessions.
+      ALTER TABLE sessions DROP CONSTRAINT IF EXISTS sessions_kind_check;
+      ALTER TABLE sessions ADD CONSTRAINT sessions_kind_check
+        CHECK (kind IN ('training', 'match', 'tournament', 'camp', 'clinic'));
+      ALTER TABLE sessions ADD COLUMN end_date date;
+
+      -- Post-session feedback from a coach to the admins.
+      CREATE TABLE session_reports (
+        id                 serial PRIMARY KEY,
+        session_id         int NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        coach_id           int REFERENCES users(id) ON DELETE SET NULL,
+        age_group          text NOT NULL DEFAULT '',
+        present_count      int NOT NULL DEFAULT 0,
+        roster_count       int NOT NULL DEFAULT 0,
+        attendance_summary text NOT NULL DEFAULT '',
+        player_progress    text NOT NULL DEFAULT '',
+        pitch_notes        text NOT NULL DEFAULT '',
+        client_id          text UNIQUE,
+        created_at         timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE INDEX session_reports_session_idx ON session_reports (session_id);
+
+      -- "Unpaid" flags an admin raises for a player's session or camp; the
+      -- parents are alerted, and the flag is cleared once paid.
+      CREATE TABLE unpaid_alerts (
+        id          serial PRIMARY KEY,
+        player_id   int NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+        session_id  int REFERENCES sessions(id) ON DELETE SET NULL,
+        title       text NOT NULL,
+        amount      numeric(12, 2) CHECK (amount IS NULL OR amount > 0),
+        note        text NOT NULL DEFAULT '',
+        created_by  int REFERENCES users(id) ON DELETE SET NULL,
+        created_at  timestamptz NOT NULL DEFAULT now(),
+        resolved_at timestamptz,
+        resolved_by int REFERENCES users(id) ON DELETE SET NULL
+      );
+      CREATE INDEX unpaid_alerts_player_idx ON unpaid_alerts (player_id) WHERE resolved_at IS NULL;
+    `
   }
 ];
 async function migrate() {
@@ -97551,7 +98060,10 @@ async function createAmbassadors(settings) {
   if (!settings.databaseUrl) throw new Error("ambassadors: databaseUrl is required");
   configure(settings);
   await migrate();
-  if (settings.demo) await seedDemo();
+  if (settings.demo) {
+    await seedDemo();
+    await seedDemoExtras();
+  }
   setInterval(() => {
     getPool().query("SELECT 1").catch(() => {
     });

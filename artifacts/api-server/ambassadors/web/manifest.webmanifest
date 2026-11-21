@@ -7,8 +7,8 @@
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#16224F",
-  "theme_color": "#16224F",
+  "background_color": "#0F2147",
+  "theme_color": "#0F2147",
   "categories": ["sports", "education"],
   "icons": [
     { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
