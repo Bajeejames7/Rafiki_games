@@ -4,9 +4,10 @@
 //    sends the offline queue (IndexedDB "ambassadors" → "outbox") to /api/sync.
 // Generated at build time from web/sw-template.js (build id and file list filled in).
 
-const CACHE = "ambassadors-mwqbtaah";
-const FILES = ["index.html","assets/index-COjdKe3p.js","assets/archivo-latin-ext-wdth-normal-7khWdh9v.woff2","assets/archivo-latin-wdth-normal-DY7AcnAa.woff2","assets/archivo-vietnamese-wdth-normal-rJmnGBSt.woff2","assets/index-BkXnnHmL.css","logo.jpg","hero.jpg","icon-192.png","icon-512.png","manifest.webmanifest","logos/daniels.png","logos/icc-imara.png","logos/rafiki.png","logos/rosslyn.png"];
+const CACHE = "ambassadors-mwqcgp8r";
+const FILES = ["index.html","assets/index-CzXC3upc.js","assets/archivo-latin-ext-wdth-normal-7khWdh9v.woff2","assets/archivo-latin-wdth-normal-DY7AcnAa.woff2","assets/archivo-vietnamese-wdth-normal-rJmnGBSt.woff2","assets/index-DJia0zbC.css","logo.jpg","hero.jpg","icon-192.png","icon-512.png","manifest.webmanifest","logos/daniels.png","logos/icc-imara.png","logos/rafiki.png","logos/rosslyn.png"];
 const SHELL = "index.html";
+const PHOTOS = "af-photos-v1";
 // "/" on its own, "/ambassadors/" inside the Rafiki server.
 const SCOPE_PATH = new URL(self.registration.scope).pathname;
 
@@ -31,6 +32,15 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) {
+    // Programme photos from the Ambassadors website: keep a copy once seen,
+    // in a cache that survives app updates, so backgrounds show offline.
+    if (url.hostname.endsWith("ambassadorsfootball.org") && url.pathname.includes("/wp-content/uploads/")) {
+      event.respondWith(caches.open(PHOTOS).then((c) => c.match(request).then((hit) => hit || fetch(request).then((res) => {
+        if (res.ok || res.type === "opaque") c.put(request, res.clone());
+        return res;
+      }))));
+      return;
+    }
     // Fonts: keep a copy once seen.
     if (url.hostname.endsWith("gstatic.com") || url.hostname.endsWith("googleapis.com")) {
       event.respondWith(caches.match(request).then((hit) => hit || fetch(request).then((res) => {
